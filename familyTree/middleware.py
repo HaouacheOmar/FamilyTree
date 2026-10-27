@@ -5,19 +5,25 @@ from django.http import JsonResponse
 
 
 class ApiTokenMiddleware:
-    """Reject /api/ calls lacking the per-launch token Electron hands to the backend and the UI.
+    """Reject /api/ calls lacking the access token (Electron's per-launch token, or the one a host configures).
 
     Without it any website open in the user's browser could read or overwrite the tree on 127.0.0.1.
-    No token configured (plain `runserver` in development) means no check.
+    Fails closed: with debug off and no token, the API refuses everything unless the deployment opts in to an
+    open demo with FAMILYTREE_PUBLIC_DEMO=1 (see settings.REQUIRE_API_TOKEN). Plain `runserver` skips the check.
     """
 
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
+        if not request.path.startswith('/api/'):
+            return self.get_response(request)
         token = settings.API_TOKEN
-        if token and request.path.startswith('/api/'):
-            sent = request.headers.get('X-FamilyTree-Token', '')
-            if not hmac.compare_digest(sent, token):
-                return JsonResponse({'error': 'Invalid or missing API token'}, status=403)
+        if not token:
+            if settings.REQUIRE_API_TOKEN:
+                return JsonResponse({'error': 'Server misconfigured: no API token set'}, status=503)
+            return self.get_response(request)
+        sent = request.headers.get('X-FamilyTree-Token', '')
+        if not hmac.compare_digest(sent, token):
+            return JsonResponse({'error': 'Invalid or missing API token'}, status=403)
         return self.get_response(request)

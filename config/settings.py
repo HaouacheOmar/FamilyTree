@@ -36,6 +36,8 @@ DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '1'
 ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost').split(',')
 # Set by Electron on every launch, or by the Docker host once; see familyTree/middleware.py.
 API_TOKEN = os.environ.get('FAMILYTREE_API_TOKEN')
+# Production (debug off) must have a token unless it deliberately runs an open, public demo.
+REQUIRE_API_TOKEN = not DEBUG and os.environ.get('FAMILYTREE_PUBLIC_DEMO') != '1'
 # Built React app (familytree_front/dist). When set, Django serves the UI at "/" (Docker image).
 FRONTEND_DIR = Path(os.environ['FAMILYTREE_FRONTEND_DIR']) if os.environ.get('FAMILYTREE_FRONTEND_DIR') else None
 

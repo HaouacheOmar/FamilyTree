@@ -184,6 +184,10 @@ class BirthdayTests(TestCase):
 
 @override_settings(API_TOKEN='secret')
 class ApiTokenTests(TestCase):
+	@override_settings(API_TOKEN=None, REQUIRE_API_TOKEN=True)
+	def test_production_without_token_fails_closed(self):
+		self.assertEqual(APIClient().get('/api/people/').status_code, 503)
+
 	def test_api_requires_token_when_configured(self):
 		client = APIClient()
 		self.assertEqual(client.get('/api/people/').status_code, 403)

@@ -19,3 +19,7 @@ services:
         value: .onrender.com
       - key: DJANGO_DEBUG
         value: "0"
+      # Deliberately open: the portfolio demo holds fictional data and visitors use it without a key.
+      # Remove this and set FAMILYTREE_API_TOKEN instead to lock the API.
+      - key: FAMILYTREE_PUBLIC_DEMO
+        value: "1"
