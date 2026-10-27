@@ -1,8 +1,13 @@
 import io
+import tempfile
 import zipfile
+from pathlib import Path
+from unittest import mock
 from datetime import date
 
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
+from django.db import connections
 from django.test import TestCase, TransactionTestCase, override_settings
 from rest_framework.test import APIClient
 
@@ -206,38 +211,42 @@ class BackupTests(TransactionTestCase):
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(list(Person.objects.values_list('first_name', flat=True)), ['Kept'])
 
-	def _backup_with_only_sqlite(self):
-		# An older backup: the raw database file, no data.json.
-		backup = APIClient().get('/api/export/').content
-		buffer = io.BytesIO()
-		with zipfile.ZipFile(io.BytesIO(backup)) as source, zipfile.ZipFile(buffer, 'w') as target:
-			for name in source.namelist():
-				if name != 'data.json':
-					target.writestr(name, source.read(name))
-		return buffer.getvalue()
+	def _sqlite_only_backup(self):
+		"""An older backup: just db.sqlite3 (parent Dad, child Kid), no data.json. Built the same way on any test database."""
+		alias = 'familytree_import'
+		with tempfile.TemporaryDirectory() as temp_dir, mock.patch.object(type(self), 'databases', {*self.databases, alias}):
+			path = Path(temp_dir) / 'db.sqlite3'
+			connections.settings[alias] = {**connections.settings['default'], 'ENGINE': 'django.db.backends.sqlite3', 'NAME': str(path), 'OPTIONS': {}}
+			try:
+				call_command('migrate', database=alias, interactive=False, verbosity=0)
+				dad = Person.objects.using(alias).create(first_name='Dad', gender='M')
+				Person.objects.using(alias).create(first_name='Kid', father=dad)
+			finally:
+				connections[alias].close()
+				del connections[alias]  # drop the cached wrapper too, or the next import reuses a closed file path
+				del connections.settings[alias]
+			buffer = io.BytesIO()
+			with zipfile.ZipFile(buffer, 'w') as archive:
+				archive.write(path, arcname='db.sqlite3')
+			return buffer.getvalue()
 
 	def test_import_of_sqlite_only_backup(self):
-		Person.objects.create(first_name='Kept')
-		backup = self._backup_with_only_sqlite()
-		Person.objects.create(first_name='Added later')
+		# SQLite restores the file directly; Postgres converts it through a temporary connection.
+		Person.objects.create(first_name='Replaced')
+		backup = self._sqlite_only_backup()
 
-		response = APIClient().post('/api/import/', {'backup': SimpleUploadedFile('b.zip', backup)})
+		with mock.patch.object(type(self), 'databases', {*self.databases, 'familytree_import'}):
+			response = APIClient().post('/api/import/', {'backup': SimpleUploadedFile('b.zip', backup)})
 
 		self.assertEqual(response.status_code, 200)
-		self.assertEqual(list(Person.objects.values_list('first_name', flat=True)), ['Kept'])
+		self.assertEqual(sorted(Person.objects.values_list('first_name', flat=True)), ['Dad', 'Kid'])
+		self.assertEqual(Person.objects.get(first_name='Kid').father.first_name, 'Dad')
 
 	def test_sqlite_backup_converts_to_fixture(self):
-		# The path a Postgres-hosted install uses for older SQLite-only backups.
-		from pathlib import Path
-		from unittest import mock
-		import tempfile
+		# The conversion Postgres uses, exercised directly so it is covered on SQLite too.
 		from .views import _replace_family_data, _sqlite_backup_to_fixture
-		dad = Person.objects.create(first_name='Dad', gender='M')
-		Person.objects.create(first_name='Kid', father=dad)
-		backup = self._backup_with_only_sqlite()
-		Person.objects.all().delete()
+		backup = self._sqlite_only_backup()
 
-		# The converter opens a temporary second connection; let this test use it.
 		allowed = mock.patch.object(type(self), 'databases', {*self.databases, 'familytree_import'})
 		with allowed, tempfile.TemporaryDirectory() as temp_dir:
 			with zipfile.ZipFile(io.BytesIO(backup)) as archive:

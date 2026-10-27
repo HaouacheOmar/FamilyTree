@@ -804,6 +804,7 @@ def _sqlite_backup_to_fixture(sqlite_path, fixture_path):
 		call_command("dumpdata", "familyTree", database=alias, output=str(fixture_path), verbosity=0)
 	finally:
 		connections[alias].close()
+		del connections[alias]  # drop the cached wrapper too, or the next import reuses a closed file path
 		del connections.settings[alias]
 
 
