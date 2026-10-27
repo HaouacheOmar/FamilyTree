@@ -1,47 +1,23 @@
 const { app, BrowserWindow, dialog, Menu, Notification, Tray, nativeImage } = require('electron');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const axios = require('axios');
+// Same birthday math as the UI (Node 22+ can require() an ES module).
+const { getBirthdayAge, localDateKey, upcomingBirthdays } = require('./src/birthdays.mjs');
 
 let backendProcess;
 let mainWindow;
 let tray;
 let birthdayPollTimer;
-let isQuitting = false;
 
 const API_BASE_URL = 'http://127.0.0.1:8000';
+// Per-launch secret: the backend rejects /api/ calls without it, so other local web pages can't touch the data.
+const API_TOKEN = crypto.randomBytes(32).toString('hex');
+const api = axios.create({ baseURL: API_BASE_URL, headers: { 'X-FamilyTree-Token': API_TOKEN } });
 const BIRTHDAY_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const BIRTHDAY_STATE_FILE = 'birthday-notifications.json';
-
-function getMonthDay(value) {
-  if (!value || typeof value !== 'string' || value.length < 10) return null;
-  return value.slice(5, 10);
-}
-
-function getDaysUntilBirthday(person, fromDate = new Date()) {
-  if (!person || !person.birth_date || person.birth_date.length < 10 || person.death_date) return null;
-
-  const birthMonth = Number.parseInt(person.birth_date.slice(5, 7), 10);
-  const birthDay = Number.parseInt(person.birth_date.slice(8, 10), 10);
-  if (!Number.isFinite(birthMonth) || !Number.isFinite(birthDay)) return null;
-
-  const today = new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate());
-  const thisYearBirthday = new Date(fromDate.getFullYear(), birthMonth - 1, birthDay);
-  const isValidThisYearBirthday = thisYearBirthday.getMonth() === birthMonth - 1 && thisYearBirthday.getDate() === birthDay;
-  const nextBirthday = isValidThisYearBirthday && thisYearBirthday >= today
-    ? thisYearBirthday
-    : new Date(fromDate.getFullYear() + 1, birthMonth - 1, birthDay);
-
-  return Math.round((nextBirthday - today) / (1000 * 60 * 60 * 24));
-}
-
-function getBirthdayAge(person) {
-  if (!person || !person.birth_date || person.birth_date.length < 4) return null;
-  const birthYear = Number.parseInt(person.birth_date.slice(0, 4), 10);
-  if (!Number.isFinite(birthYear)) return null;
-  return new Date().getFullYear() - birthYear;
-}
 
 function getBirthdayIcon() {
   const svg = `
@@ -66,12 +42,12 @@ function readBirthdayState() {
   try {
     const statePath = getBirthdayStatePath();
     if (!fs.existsSync(statePath)) {
-      return { notifiedDate: null, notifiedIds: [] };
+      return { notifiedDate: null };
     }
     return JSON.parse(fs.readFileSync(statePath, 'utf8'));
   } catch (error) {
     console.error('Failed to read birthday state:', error);
-    return { notifiedDate: null, notifiedIds: [] };
+    return { notifiedDate: null };
   }
 }
 
@@ -85,22 +61,12 @@ function writeBirthdayState(state) {
 
 function buildBirthdaySnapshot(people) {
   const today = new Date();
-  const todayKey = today.toISOString().slice(0, 10);
-
-  const peopleWithDays = people
-    .map((person) => ({ person, daysUntil: getDaysUntilBirthday(person, today) }))
-    .filter((entry) => entry.daysUntil !== null)
-    .sort((left, right) => left.daysUntil - right.daysUntil || `${left.person.last_name || ''} ${left.person.first_name || ''}`.localeCompare(`${right.person.last_name || ''} ${right.person.first_name || ''}`));
-
-  const todayBirthdays = peopleWithDays.filter((entry) => entry.daysUntil === 0).map((entry) => entry.person);
-  const upcoming7 = peopleWithDays.filter((entry) => entry.daysUntil > 0 && entry.daysUntil <= 7);
-  const upcoming30 = peopleWithDays.filter((entry) => entry.daysUntil > 0 && entry.daysUntil <= 30);
-
+  const upcoming30 = upcomingBirthdays(people, 30, today);
   return {
-    todayKey,
-    todayBirthdays,
-    upcoming7,
-    upcoming30,
+    todayKey: localDateKey(today),
+    todayBirthdays: upcoming30.filter((entry) => entry.daysUntil === 0).map((entry) => entry.person),
+    upcoming7: upcoming30.filter((entry) => entry.daysUntil > 0 && entry.daysUntil <= 7),
+    upcoming30: upcoming30.filter((entry) => entry.daysUntil > 0),
   };
 }
 
@@ -173,10 +139,7 @@ function notifyBirthdaySnapshot(snapshot) {
   const notification = new Notification({ title, body, silent: false });
   notification.show();
 
-  writeBirthdayState({
-    notifiedDate: snapshot.todayKey,
-    notifiedIds: snapshot.todayBirthdays.map((person) => String(person.id)),
-  });
+  writeBirthdayState({ notifiedDate: snapshot.todayKey });
 }
 
 function createTray() {
@@ -204,15 +167,33 @@ function showMainWindow() {
 }
 
 function quitApplication() {
-  isQuitting = true;
   app.quit();
+}
+
+// The backend is a PyInstaller onefile exe: a bootloader with the real Python server as its child.
+// Killing only the bootloader would leave the server holding port 8000, so kill the whole tree.
+function stopBackend() {
+  if (!backendProcess || backendProcess.exitCode !== null) return;
+  if (process.platform === 'win32') {
+    execFile('taskkill', ['/pid', String(backendProcess.pid), '/T', '/F'], () => {});
+  } else {
+    backendProcess.kill();
+  }
+  backendProcess = null;
+}
+
+function shutdown() {
+  if (birthdayPollTimer) clearInterval(birthdayPollTimer);
+  stopBackend();
+  if (tray) tray.destroy();
+  tray = null;
 }
 
 async function fetchPeopleWithRetries(retries = 15, retryDelayMs = 1000) {
   let lastError = null;
   for (let attempt = 1; attempt <= retries; attempt += 1) {
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/people/`, { timeout: 4000 });
+      const response = await api.get('/api/people/', { timeout: 4000 });
       return response.data || [];
     } catch (error) {
       lastError = error;
@@ -266,30 +247,24 @@ function findPortableUsbDataDir() {
 }
 
 function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    webPreferences: {
-      nodeIntegration: true, // Required for your current setup
-      contextIsolation: false,
-    },
-  });
+  // Default webPreferences (no Node in the renderer): the UI only talks HTTP to the backend.
+  mainWindow = new BrowserWindow({ width: 1200, height: 800 });
 
-  // If packaged, load from dist folder. If dev, load root index.html
-  const indexPath = app.isPackaged 
-    ? path.join(__dirname, 'dist/index.html') 
-    : path.join(__dirname, 'index.html');
+  // The raw index.html points at /src/main.jsx, which only resolves under Vite, so always load the build.
+  mainWindow.loadFile(path.join(__dirname, 'dist/index.html'), { query: { token: API_TOKEN } });
+  if (!app.isPackaged) mainWindow.webContents.openDevTools();
+}
 
-  mainWindow.loadFile(indexPath);
-  mainWindow.webContents.openDevTools();
-
-  // Closing the window should fully quit the app and stop the backend.
-  mainWindow.on('close', () => {
-    isQuitting = true;
-  });
+// A second launch would start a second backend fighting for port 8000; focus the first window instead.
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => showMainWindow());
 }
 
 app.whenReady().then(async () => {
+  if (!hasSingleInstanceLock) return;
   app.setAppUserModelId('com.familytree.app');
 
   // 1. Determine the correct path
@@ -314,7 +289,7 @@ app.whenReady().then(async () => {
     return;
   }
 
-  const backendEnv = { ...process.env };
+  const backendEnv = { ...process.env, FAMILYTREE_API_TOKEN: API_TOKEN };
   const portableDataDir = findPortableUsbDataDir();
 
   if (portableDataDir) {
@@ -359,15 +334,8 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  if (birthdayPollTimer) clearInterval(birthdayPollTimer);
-  if (backendProcess) backendProcess.kill();
-  if (tray) tray.destroy();
+  shutdown();
   app.quit();
 });
 
-app.on('before-quit', () => {
-  isQuitting = true;
-  if (birthdayPollTimer) clearInterval(birthdayPollTimer);
-  if (backendProcess) backendProcess.kill();
-  if (tray) tray.destroy();
-});
+app.on('before-quit', shutdown);

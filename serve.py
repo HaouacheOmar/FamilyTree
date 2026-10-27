@@ -1,5 +1,4 @@
 import os
-import sys
 import django
 from django.core.management import call_command
 from django.core.wsgi import get_wsgi_application
@@ -24,11 +23,13 @@ def main():
     application = get_wsgi_application()
 
     # 5. Start the Waitress Server
-    port = 8000
-    print(f"Starting Waitress server on http://127.0.0.1:{port}...")
+    # Desktop: loopback only. Docker sets FAMILYTREE_HOST=0.0.0.0 so the published port reaches it.
+    host = os.environ.get('FAMILYTREE_HOST', '127.0.0.1')
+    port = int(os.environ.get('FAMILYTREE_PORT') or os.environ.get('PORT') or '8000')  # Render sets PORT
+    print(f"Starting Waitress server on http://{host}:{port}...")
     
     # Waitress will quietly and efficiently serve your app
-    serve(application, host='127.0.0.1', port=port)
+    serve(application, host=host, port=port)
 
 
 if __name__ == '__main__':

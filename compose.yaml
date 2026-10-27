@@ -1,0 +1,20 @@
+# docker compose up -d --build   then open http://localhost:8000/?token=<FAMILYTREE_API_TOKEN>
+# Settings come from .env (copy .env.example). There are no user accounts: the token is the only lock.
+services:
+  familytree:
+    build: .
+    image: familytree:latest
+    restart: unless-stopped
+    ports:
+      # Loopback only by default. To reach it from other machines, put an HTTPS reverse proxy in front
+      # (or change to "8000:8000" on a trusted network) and list the hostname in DJANGO_ALLOWED_HOSTS.
+      - "127.0.0.1:8000:8000"
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?set DJANGO_SECRET_KEY in .env}
+      FAMILYTREE_API_TOKEN: ${FAMILYTREE_API_TOKEN:?set FAMILYTREE_API_TOKEN in .env}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+    volumes:
+      - familytree-data:/data
+
+volumes:
+  familytree-data:

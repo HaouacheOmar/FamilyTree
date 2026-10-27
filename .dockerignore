@@ -1,0 +1,15 @@
+.git
+**/__pycache__
+**/*.py[cod]
+env/
+venv/
+.venv/
+.env
+*.sqlite3
+media/
+dist/
+build/
+familytree_front/node_modules
+familytree_front/dist
+familytree_front/release
+.playwright-mcp

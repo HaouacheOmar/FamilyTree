@@ -99,7 +99,7 @@ class PersonSerializer(serializers.ModelSerializer):
         return None
 
     def _get_name(self, person):
-        return f"{person.first_name} {person.last_name}".strip() if person else None
+        return str(person) if person else None
 
     def get_spouse_name(self, obj): return self._get_name(obj.spouse)
     def get_husband_name(self, obj): return self._get_name(obj.husband)
@@ -179,7 +179,6 @@ class PersonSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('A person cannot be their own parent.')
         if current_id and (adoptive_mother and adoptive_mother.id == current_id or adoptive_father and adoptive_father.id == current_id):
             raise serializers.ValidationError('A person cannot be their own adoptive parent.')
+        if current_id and any(getattr(attrs.get(field), 'id', None) == current_id for field in Person.PARTNER_FIELDS):
+            raise serializers.ValidationError('A person cannot be their own partner.')
         return super().validate(attrs)
-
-    def update(self, instance, validated_data):
-        return super().update(instance, validated_data)

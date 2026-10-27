@@ -1,6 +1,13 @@
+import calendar
+
 from django.db import models
 
+
 class Person(models.Model):
+    PARENT_FIELDS = ('mother', 'father', 'adoptive_mother', 'adoptive_father')
+    PARTNER_FIELDS = ('spouse', 'husband', 'wife')
+    LINK_FIELDS = PARENT_FIELDS + PARTNER_FIELDS
+
     first_name = models.CharField(max_length=150)
     last_name = models.CharField(max_length=150, blank=True)
 
@@ -56,8 +63,13 @@ class Person(models.Model):
     def __str__(self):
         return f"{self.first_name} {self.last_name}".strip()
 
-    def parents(self):
-        return [p for p in (self.mother, self.father) if p]
+    @classmethod
+    def birthdays_on(cls, day):
+        """Living people whose birthday falls on `day` (Feb 29 births count on Feb 28 in non-leap years)."""
+        match = models.Q(birth_date__month=day.month, birth_date__day=day.day)
+        if (day.month, day.day) == (2, 28) and not calendar.isleap(day.year):
+            match |= models.Q(birth_date__month=2, birth_date__day=29)
+        return cls.objects.filter(match, death_date__isnull=True)
 
 
 class Relationship(models.Model):

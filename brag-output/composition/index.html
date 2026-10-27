@@ -1,0 +1,577 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Family Tree — brag</title>
+    <script src="assets/vendor/gsap.min.js"></script>
+    <script src="assets/audio-reactive.js"></script>
+    <style>
+      /* The app's own bundled font (IBM Plex Sans Arabic), shipped locally: Arabic + Latin subsets. */
+      @font-face { font-family: "IBM Plex Sans Arabic"; font-weight: 400; src: url("assets/fonts/ibm-plex-sans-arabic-arabic-400-normal.woff2") format("woff2"); unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+200C-200E, U+FB50-FDFF, U+FE70-FEFC; }
+      @font-face { font-family: "IBM Plex Sans Arabic"; font-weight: 400; src: url("assets/fonts/ibm-plex-sans-arabic-latin-400-normal.woff2") format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+20AC, U+2122, U+2212, U+FEFF, U+FFFD; }
+      @font-face { font-family: "IBM Plex Sans Arabic"; font-weight: 500; src: url("assets/fonts/ibm-plex-sans-arabic-arabic-500-normal.woff2") format("woff2"); unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+200C-200E, U+FB50-FDFF, U+FE70-FEFC; }
+      @font-face { font-family: "IBM Plex Sans Arabic"; font-weight: 500; src: url("assets/fonts/ibm-plex-sans-arabic-latin-500-normal.woff2") format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+20AC, U+2122, U+2212, U+FEFF, U+FFFD; }
+      @font-face { font-family: "IBM Plex Sans Arabic"; font-weight: 600; src: url("assets/fonts/ibm-plex-sans-arabic-arabic-600-normal.woff2") format("woff2"); unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+200C-200E, U+FB50-FDFF, U+FE70-FEFC; }
+      @font-face { font-family: "IBM Plex Sans Arabic"; font-weight: 600; src: url("assets/fonts/ibm-plex-sans-arabic-latin-600-normal.woff2") format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+20AC, U+2122, U+2212, U+FEFF, U+FFFD; }
+      @font-face { font-family: "IBM Plex Sans Arabic"; font-weight: 700; src: url("assets/fonts/ibm-plex-sans-arabic-arabic-700-normal.woff2") format("woff2"); unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+200C-200E, U+FB50-FDFF, U+FE70-FEFC; }
+      @font-face { font-family: "IBM Plex Sans Arabic"; font-weight: 700; src: url("assets/fonts/ibm-plex-sans-arabic-latin-700-normal.woff2") format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+20AC, U+2122, U+2212, U+FEFF, U+FFFD; }
+
+      /* Tokens from familytree_front/style/App.css */
+      :root {
+        --bg: #f7f4ee;
+        --surface: #ffffff;
+        --surface-muted: #f1ece3;
+        --border: #e3dccf;
+        --text: #1f2a24;
+        --muted: #5c665f;
+        --primary: #2f6b4f;
+        --primary-soft: #e5efe8;
+        --accent: #b45309;
+        --accent-strong: #92400e;
+        --accent-soft: #fdf1e1;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "IBM Plex Sans Arabic", sans-serif;
+      }
+
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: var(--bg);
+      }
+
+      /* --- Persistent background layer --- */
+      .bg-grain {
+        position: absolute;
+        inset: 0;
+        opacity: 0.35;
+        background-image: radial-gradient(rgba(92, 102, 95, 0.09) 1px, transparent 1px);
+        background-size: 6px 6px;
+      }
+      #glow {
+        position: absolute;
+        left: 260px;
+        top: 40px;
+        width: 1400px;
+        height: 1000px;
+        border-radius: 50%;
+        background: radial-gradient(closest-side, rgba(47, 107, 79, 0.22), rgba(180, 83, 9, 0.08) 55%, transparent 75%);
+        opacity: 0.7;
+      }
+      #ghost {
+        position: absolute;
+        right: -40px;
+        bottom: -120px;
+        font-size: 420px;
+        font-weight: 700;
+        line-height: 1;
+        color: var(--primary);
+        opacity: 0.07;
+        direction: rtl;
+        white-space: nowrap;
+      }
+
+      .scene {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+      }
+      .scene + .scene { opacity: 0; }
+
+      .h-display { margin: 0; font-weight: 700; letter-spacing: -0.01em; line-height: 1.08; }
+      .h-sub { margin: 0; font-weight: 400; color: var(--muted); line-height: 1.35; }
+      .accent { color: var(--primary); }
+
+      /* --- Scene 1: hook --- */
+      #s1 .branch { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+      #s1 .title-ar {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 300px;
+        text-align: center;
+        direction: rtl;
+        font-size: 176px;
+        font-weight: 700;
+        color: var(--text);
+      }
+      #s1 .line {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 610px;
+        text-align: center;
+        font-size: 60px;
+        font-weight: 500;
+        color: var(--text);
+      }
+      #s1 .line span { display: inline-block; }
+
+      /* --- Scene 2: reveal --- */
+      #s2 .copy { position: absolute; left: 110px; top: 300px; width: 600px; }
+      #s2 .brand { display: flex; align-items: center; gap: 22px; }
+      #s2 .brand img { width: 96px; height: 96px; }
+      #s2 .brand h1 { font-size: 92px; }
+      #s2 .tagline { margin-top: 36px; font-size: 38px; }
+      .window {
+        position: absolute;
+        border-radius: 22px;
+        overflow: hidden;
+        background: var(--surface);
+        border: 3px solid var(--border);
+        box-shadow: 0 30px 80px rgba(31, 42, 36, 0.18), 0 6px 18px rgba(31, 42, 36, 0.08);
+      }
+      #s2 .window { left: 760px; top: 236px; width: 1080px; height: 608px; }
+      #s2 .window img { display: block; width: 1080px; height: 608px; }
+
+      /* --- Scenes 3–4: one tree stage --- */
+      #stage-tree { position: absolute; left: 0; top: 63px; width: 1920px; height: 954px; transform-origin: 874px 85px; }
+      #stage-tree img { position: absolute; left: 0; top: 0; width: 1920px; height: 954px; }
+      #tree-after { opacity: 0; }
+      #s3 .caption { position: absolute; left: 110px; top: 150px; width: 580px; }
+      #s3 .caption h2 { font-size: 64px; }
+      #s3 .caption p { margin-top: 18px; font-size: 32px; }
+      #caption-b { opacity: 0; }
+      #form { position: absolute; left: 1150px; top: 30px; width: 660px; height: 935px; transform-origin: 50% 50%; }
+      #form .shot { position: absolute; inset: 0; border-radius: 16px; box-shadow: 0 30px 80px rgba(31, 42, 36, 0.22); }
+      #form .shot img { display: block; width: 660px; height: 935px; border-radius: 16px; }
+      .typed {
+        position: absolute;
+        height: 39px;
+        line-height: 39px;
+        font-size: 14px;
+        font-weight: 400;
+        color: var(--text);
+        white-space: nowrap;
+      }
+      .typed span { opacity: 0; }
+      #cursor { position: absolute; left: 0; top: 0; width: 34px; height: 44px; }
+      .ring {
+        position: absolute;
+        border: 4px solid var(--primary);
+        border-radius: 18px;
+        box-shadow: 0 0 0 10px rgba(47, 107, 79, 0.16), 0 14px 40px rgba(47, 107, 79, 0.25);
+        opacity: 0;
+      }
+      .tag {
+        position: absolute;
+        padding: 8px 18px;
+        border-radius: 999px;
+        background: var(--primary);
+        color: #ffffff;
+        font-size: 24px;
+        font-weight: 600;
+        white-space: nowrap;
+        opacity: 0;
+      }
+      .gen {
+        position: absolute;
+        font-size: 30px;
+        font-weight: 600;
+        color: var(--primary);
+        opacity: 0;
+        white-space: nowrap;
+      }
+      .gen small { display: block; font-size: 22px; font-weight: 400; color: var(--muted); }
+      #memory-note {
+        position: absolute;
+        left: 560px;
+        top: 760px;
+        width: 800px;
+        text-align: center;
+        opacity: 0;
+      }
+      #memory-note .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 16px;
+        padding: 18px 34px;
+        border-radius: 999px;
+        background: var(--surface);
+        border: 3px solid var(--border);
+        box-shadow: 0 18px 50px rgba(31, 42, 36, 0.14);
+        font-size: 38px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      #memory-note svg { width: 44px; height: 44px; }
+
+      /* --- Scene 5: Arabic search --- */
+      #s5 .cam { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; }
+      #s5 .cam img { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+      #ar-after { opacity: 0; }
+      #query {
+        position: absolute;
+        left: 1181px;
+        top: 21px;
+        width: 528px;
+        height: 39px;
+        direction: rtl;
+        text-align: right;
+        font-size: 14px;
+        line-height: 39px;
+        color: var(--text);
+      }
+      #query span { position: absolute; right: 0; top: 0; opacity: 0; }
+      /* Hides the Arabic placeholder (right side of the RTL pill) so the query can be typed over it. */
+      #search-cover { position: absolute; left: 1300px; top: 25px; width: 412px; height: 31px; border-radius: 999px; background: #f1ece3; }
+      #s5 .caption {
+        position: absolute;
+        left: 90px;
+        top: 845px;
+        width: 1100px;
+        padding: 28px 36px;
+        border-radius: 22px;
+        background: rgba(247, 244, 238, 0.96);
+        border: 3px solid var(--border);
+        box-shadow: 0 18px 50px rgba(31, 42, 36, 0.12);
+        opacity: 0;
+      }
+      #s5 .caption h3 { margin: 0; font-size: 38px; font-weight: 600; }
+      #s5 .caption p { margin: 10px 0 0; font-size: 28px; color: var(--muted); }
+      #s5 .caption .ar { direction: rtl; unicode-bidi: isolate; color: var(--primary); font-weight: 600; }
+
+      /* --- Scene 6: birthdays --- */
+      #s6 .copy { position: absolute; left: 110px; top: 200px; width: 1700px; }
+      #s6 h2 { font-size: 92px; }
+      #s6 .copy p { margin-top: 18px; font-size: 36px; }
+      #bday { position: absolute; left: 110px; top: 470px; width: 1254px; height: 443px; overflow: hidden; border-radius: 24px; box-shadow: 0 30px 80px rgba(180, 83, 9, 0.16); border: 3px solid rgba(180, 83, 9, 0.22); }
+      #bday img { position: absolute; left: 0; top: 0; width: 3528px; height: 443px; }
+      #chip-glow { position: absolute; left: 28px; top: 294px; width: 348px; height: 82px; border-radius: 999px; box-shadow: 0 0 0 6px rgba(180, 83, 9, 0.35), 0 0 40px rgba(180, 83, 9, 0.45); opacity: 0; }
+      #next-glow { position: absolute; left: 614px; top: 294px; width: 548px; height: 120px; border-radius: 20px; box-shadow: 0 0 0 5px rgba(47, 107, 79, 0.35); opacity: 0; }
+      #cake { position: absolute; left: 1430px; top: 520px; width: 330px; height: 330px; color: var(--accent); opacity: 0; }
+
+      /* --- Scene 7: keeps it with you --- */
+      #s7 h2 { position: absolute; left: 110px; top: 150px; width: 1700px; font-size: 76px; }
+      .card {
+        position: absolute;
+        top: 400px;
+        width: 520px;
+        height: 420px;
+        padding: 48px;
+        box-sizing: border-box;
+        border-radius: 28px;
+        background: var(--surface);
+        border: 3px solid var(--border);
+        box-shadow: 0 24px 60px rgba(31, 42, 36, 0.12);
+        opacity: 0;
+      }
+      .card .ico { width: 84px; height: 84px; border-radius: 22px; background: var(--primary-soft); color: var(--primary); display: grid; place-items: center; }
+      .card .ico svg { width: 48px; height: 48px; }
+      .card h3 { margin: 34px 0 0; font-size: 42px; font-weight: 700; line-height: 1.15; }
+      .card p { margin: 16px 0 0; font-size: 30px; color: var(--muted); line-height: 1.35; }
+      #c1 { left: 110px; }
+      #c2 { left: 700px; }
+      #c3 { left: 1290px; }
+
+      /* --- Scene 8: outro --- */
+      #s8 .lockup { position: absolute; left: 0; right: 0; top: 250px; text-align: center; }
+      #halo { position: absolute; left: 760px; top: 140px; width: 400px; height: 400px; border-radius: 50%; background: radial-gradient(closest-side, rgba(47, 107, 79, 0.3), transparent 70%); }
+      #s8 .logo { width: 200px; height: 200px; }
+      #s8 h1 { margin-top: 26px; font-size: 120px; }
+      #s8 .ar { margin-top: 8px; font-size: 76px; font-weight: 600; color: var(--primary); direction: rtl; }
+      #s8 .tagline { margin-top: 30px; font-size: 40px; }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="40" data-width="1920" data-height="1080" data-fps="30">
+      <!-- Persistent background (untimed, behind every scene) -->
+      <div class="bg-grain"></div>
+      <div id="glow"></div>
+      <div id="ghost" data-layout-ignore="true">شجرة العائلة</div>
+
+      <!-- Scene 1 — Hook (0–4s) -->
+      <div id="s1" class="scene">
+        <svg class="branch" viewBox="0 0 1920 1080" aria-hidden="true">
+          <path id="stem" d="M 180 1000 C 520 930, 760 860, 960 850 S 1420 820, 1760 740" fill="none" stroke="#2f6b4f" stroke-width="6" stroke-linecap="round" />
+          <g fill="#2f6b4f">
+            <ellipse class="leaf" cx="470" cy="925" rx="46" ry="18" transform="rotate(-30 470 925)" />
+            <ellipse class="leaf" cx="760" cy="905" rx="40" ry="16" transform="rotate(28 760 905)" />
+            <ellipse class="leaf" cx="1210" cy="805" rx="44" ry="17" transform="rotate(-24 1210 805)" />
+            <ellipse class="leaf" cx="1520" cy="815" rx="38" ry="15" transform="rotate(22 1520 815)" />
+          </g>
+        </svg>
+        <div class="title-ar">شجرة العائلة</div>
+        <div class="line"><span id="hook-a">Every family has a story.</span> <span id="hook-b" class="accent">Keep it.</span></div>
+      </div>
+
+      <!-- Scene 2 — Reveal (4–9s) -->
+      <div id="s2" class="scene">
+        <div class="copy">
+          <div class="brand"><img src="assets/logo.svg" alt="" /><h1 class="h-display">Family Tree</h1></div>
+          <p class="h-sub tagline">Explore family connections, add members, and keep your family history organized.</p>
+        </div>
+        <div class="window" id="s2-window"><img id="s2-shot" data-layout-allow-overflow="true" src="assets/ui/app-en.png" alt="" /></div>
+      </div>
+
+      <!-- Scenes 3–4 — Add a person, the tree grows (9–23s) -->
+      <div id="s3" class="scene">
+        <div id="stage-tree">
+          <img id="tree-before" src="assets/ui/tree-before.png" alt="" />
+          <img id="tree-after" src="assets/ui/tree-after.png" alt="" />
+          <!-- Yasmine Benali's card in tree-after (656,670,258,78) × 1.2268 -->
+          <div class="ring" id="ring-new" style="left: 797px; top: 814px; width: 332px; height: 112px"></div>
+          <div class="tag" id="tag-new" style="left: 1150px; top: 840px">Just added</div>
+        </div>
+        <div class="caption" id="caption-a">
+          <h2 class="h-display">Add a family member.</h2>
+          <p class="h-sub">Name, dates, parents. Save.</p>
+        </div>
+        <div class="caption" id="caption-b">
+          <h2 class="h-display">Three generations, one place.</h2>
+        </div>
+        <div class="gen" id="gen1" style="left: 1440px; top: 120px">Grandparents</div>
+        <div class="gen" id="gen2" style="left: 1530px; top: 510px">Parents</div>
+        <div class="gen" id="gen3" style="left: 1170px; top: 905px">Grandchildren</div>
+        <div id="form">
+          <div class="shot"><img src="assets/ui/add-form-names-empty.png" alt="" /></div>
+          <div class="typed" id="t-first" style="left: 37px; top: 96px"></div>
+          <div class="typed" id="t-last" style="left: 348px; top: 96px"></div>
+        </div>
+        <svg id="cursor" viewBox="0 0 34 44" aria-hidden="true">
+          <path d="M3 3 L3 34 L11 26 L17 40 L23 37 L17 24 L29 24 Z" fill="#1f2a24" stroke="#ffffff" stroke-width="2.5" stroke-linejoin="round" />
+        </svg>
+        <div id="memory-note">
+          <span class="pill">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#5c665f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 22V11" /><path d="M12 15c-4 0-6-3-6-7 4 0 6 3 6 7Z" /><path d="M12 12c3.5 0 5.5-2.5 5.5-6-3.5 0-5.5 2.5-5.5 6Z" />
+            </svg>
+            Ahmed Benali · 1948 – 2015 · in memory
+          </span>
+        </div>
+      </div>
+
+      <!-- Scene 5 — Search by relation, in Arabic (23–28s) -->
+      <div id="s5" class="scene">
+        <div class="cam" id="cam5" data-layout-allow-overflow="true">
+          <img id="ar-before" src="assets/ui/app-ar.png" alt="" />
+          <img id="ar-after" src="assets/ui/app-ar-search.png" alt="" />
+          <div id="search-cover"></div>
+          <div id="query"><span id="q1">ج</span><span id="q2">جد</span><span id="q3">جدة</span></div>
+          <!-- Fatima Haddad's card in app-ar-search (677,737,258,78) -->
+          <div class="ring" id="ring-fatima" style="left: 671px; top: 731px; width: 270px; height: 90px"></div>
+        </div>
+        <div class="caption" id="cap5">
+          <h3>Search by relation (aunt, grandpa, spouse) or family name</h3>
+          <p>in Arabic, English or French · <span class="ar">جدة</span> finds the grandmother</p>
+        </div>
+      </div>
+
+      <!-- Scene 6 — Birthdays (28–33s) -->
+      <div id="s6" class="scene">
+        <div class="copy">
+          <h2 class="h-display">It remembers birthdays.</h2>
+          <p class="h-sub">Today, and the week ahead.</p>
+        </div>
+        <div id="bday">
+          <img data-layout-allow-overflow="true" src="assets/ui/birthdays.png" alt="" />
+          <div id="chip-glow"></div>
+          <div id="next-glow"></div>
+        </div>
+        <svg id="cake" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20 21v-8a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8" />
+          <path d="M4 16s.5-1 2-1 2.5 2 4 2 2.5-2 4-2 2.5 2 4 2 2-1 2-1" />
+          <path d="M2 21h20" /><path d="M7 8v3M12 8v3M17 8v3" /><path d="M7 4h.01M12 4h.01M17 4h.01" />
+        </svg>
+      </div>
+
+      <!-- Scene 7 — Keeps it with you (33–37.6s) -->
+      <div id="s7" class="scene">
+        <h2 class="h-display" data-layout-allow-overlap="true">Your family's story stays with you.</h2>
+        <div class="card" id="c1">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M17 7H9M17 7v8" /><path d="M4 20h16" /></svg></div>
+          <h3>GEDCOM import &amp; export</h3>
+          <p>Move your tree to and from other genealogy apps.</p>
+        </div>
+        <div class="card" id="c2">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="5" rx="1" /><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9" /><path d="M10 13h4" /></svg></div>
+          <h3>Backup &amp; restore</h3>
+          <p>One file with every person and photo.</p>
+        </div>
+        <div class="card" id="c3">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></svg></div>
+          <h3>Works offline</h3>
+          <p>On your computer, or self-hosted with Docker.</p>
+        </div>
+      </div>
+
+      <!-- Scene 8 — Outro (37.6–40s) -->
+      <div id="s8" class="scene">
+        <div id="halo"></div>
+        <div class="lockup">
+          <img class="logo" id="logo" src="assets/logo.svg" alt="" />
+          <h1 class="h-display" id="out-name">Family Tree</h1>
+          <div class="ar" id="out-ar">شجرة العائلة</div>
+          <p class="h-sub tagline" id="out-tag">Keep your family history organized.</p>
+        </div>
+      </div>
+
+      <!-- Audio: music bed + motion-matched SFX -->
+      <audio id="music" src="assets/music/happy-beats-business-moves-vol-12-by-ende-dot-app.mp3" data-start="0" data-duration="40" data-track-index="10"
+        data-automation='{"version":1,"lanes":[{"target":"volume","points":[{"t":0,"v":0},{"t":0.8,"v":0.28},{"t":38.4,"v":0.28},{"t":40,"v":0}]}]}'></audio>
+      <audio id="sfx-key-1" src="assets/sfx/keypress-003.wav" data-start="10.05" data-duration="0.3" data-track-index="11" data-volume="0.45"></audio>
+      <audio id="sfx-key-2" src="assets/sfx/keypress-011.wav" data-start="10.41" data-duration="0.3" data-track-index="12" data-volume="0.45"></audio>
+      <audio id="sfx-key-3" src="assets/sfx/keypress-017.wav" data-start="10.95" data-duration="0.3" data-track-index="11" data-volume="0.45"></audio>
+      <audio id="sfx-key-4" src="assets/sfx/keypress-024.wav" data-start="11.31" data-duration="0.3" data-track-index="12" data-volume="0.45"></audio>
+      <audio id="sfx-click" src="assets/sfx/click_003.ogg" data-start="12.5" data-duration="0.01" data-track-index="13" data-volume="0.6"></audio>
+      <audio id="sfx-pop" src="assets/sfx/impactSoft_medium_001.ogg" data-start="13.5" data-duration="0.18" data-track-index="14" data-volume="0.6"></audio>
+      <audio id="sfx-row-1" src="assets/sfx/impactSoft_medium_002.ogg" data-start="17.47" data-duration="0.14" data-track-index="15" data-volume="0.5"></audio>
+      <audio id="sfx-row-3" src="assets/sfx/impactSoft_medium_004.ogg" data-start="19.66" data-duration="0.15" data-track-index="15" data-volume="0.5"></audio>
+      <audio id="sfx-key-5" src="assets/sfx/keypress-011.wav" data-start="23.65" data-duration="0.3" data-track-index="11" data-volume="0.45"></audio>
+      <audio id="sfx-key-6" src="assets/sfx/keypress-024.wav" data-start="23.95" data-duration="0.3" data-track-index="12" data-volume="0.45"></audio>
+      <audio id="sfx-key-7" src="assets/sfx/keypress-003.wav" data-start="24.25" data-duration="0.3" data-track-index="11" data-volume="0.45"></audio>
+      <audio id="sfx-result" src="assets/sfx/bong_001.ogg" data-start="24.56" data-duration="0.12" data-track-index="16" data-volume="0.55"></audio>
+      <audio id="sfx-bday" src="assets/sfx/impactSoft_medium_004.ogg" data-start="29.4" data-duration="0.15" data-track-index="14" data-volume="0.5"></audio>
+      <audio id="sfx-card-1" src="assets/sfx/card-slide-1.ogg" data-start="33.29" data-duration="0.5" data-track-index="17" data-volume="0.45"></audio>
+      <audio id="sfx-card-2" src="assets/sfx/card-slide-1.ogg" data-start="34.38" data-duration="0.5" data-track-index="18" data-volume="0.45"></audio>
+      <audio id="sfx-card-3" src="assets/sfx/card-slide-1.ogg" data-start="35.47" data-duration="0.5" data-track-index="17" data-volume="0.45"></audio>
+      <audio id="sfx-logo" src="assets/sfx/impactBell_heavy_000.ogg" data-start="38.2" data-duration="1.48" data-track-index="19" data-volume="0.45"></audio>
+    </div>
+
+    <script>
+      // Split typed text into per-character spans (Latin only; Arabic uses whole-word steps to keep letters joined).
+      function charSpans(el, text) {
+        el.innerHTML = "";
+        return text.split("").map(ch => {
+          const s = document.createElement("span");
+          s.textContent = ch;
+          el.appendChild(s);
+          return s;
+        });
+      }
+      const firstChars = charSpans(document.getElementById("t-first"), "Yasmine");
+      const lastChars = charSpans(document.getElementById("t-last"), "Benali");
+
+      const tl = gsap.timeline({ paused: true });
+
+      // Calm blur crossfade (hyperframes-animation transitions/css-dissolve, calm variant).
+      function crossfade(from, to, T) {
+        tl.to(from, { filter: "blur(18px)", scale: 1.03, duration: 0.6, ease: "power1.in" }, T);
+        tl.to(from, { opacity: 0, duration: 0.4, ease: "power1.in" }, T + 0.3);
+        tl.fromTo(to, { opacity: 0, filter: "blur(18px)", scale: 0.97 }, { opacity: 1, duration: 0.35, ease: "power1.inOut" }, T + 0.3);
+        tl.to(to, { filter: "blur(0px)", scale: 1, duration: 0.55, ease: "power1.out" }, T + 0.55);
+      }
+
+      // Background ambience: slow ghost-type drift across the whole film.
+      tl.fromTo("#ghost", { x: 60 }, { x: -120, duration: 40, ease: "none" }, 0);
+
+      // ---------- Scene 1 — Hook (0–4) ----------
+      const stem = document.getElementById("stem");
+      const stemLength = 1500;
+      tl.fromTo(stem, { strokeDasharray: stemLength, strokeDashoffset: stemLength }, { strokeDashoffset: 0, duration: 1.3, ease: "power2.inOut" }, 0.15);
+      tl.fromTo("#s1 .leaf", { scale: 0, transformOrigin: "50% 50%" }, { scale: 1, duration: 0.45, ease: "back.out(1.6)", stagger: 0.18 }, 0.55);
+      tl.fromTo("#s1 .title-ar", { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: 0.8, ease: "power3.out" }, 0.45);
+      tl.fromTo("#hook-a", { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.55, ease: "power2.out" }, 1.45);
+      tl.fromTo("#hook-b", { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.5, ease: "power2.out" }, 2.75);
+
+      // ---------- Scene 2 — Reveal (4–9) ----------
+      crossfade("#s1", "#s2", 3.7);
+      tl.fromTo("#s2 .brand", { opacity: 0, x: -30 }, { opacity: 1, x: 0, duration: 0.6, ease: "power3.out" }, 4.2);
+      tl.fromTo("#s2 .tagline", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.6, ease: "power2.out" }, 4.6);
+      tl.fromTo("#s2-window", { opacity: 0, y: 80, rotation: 1.5 }, { opacity: 1, y: 0, rotation: 0, duration: 0.9, ease: "power3.out" }, 4.35);
+      tl.fromTo("#s2-shot", { scale: 1, transformOrigin: "60% 70%" }, { scale: 1.08, duration: 4.6, ease: "sine.inOut" }, 4.4);
+
+      // ---------- Scene 3 — Add a person (9–16) ----------
+      crossfade("#s2", "#s3", 8.7);
+      tl.fromTo("#tree-before", { filter: "blur(5px)", opacity: 0.45 }, { filter: "blur(5px)", opacity: 0.45, duration: 0.1 }, 9.0);
+      tl.fromTo("#caption-a h2", { opacity: 0, y: 26 }, { opacity: 1, y: 0, duration: 0.6, ease: "power3.out" }, 9.3);
+      tl.fromTo("#caption-a p", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.5, ease: "power2.out" }, 9.6);
+      tl.fromTo("#form", { opacity: 0, y: 70, scale: 0.97 }, { opacity: 1, y: 0, scale: 1, duration: 0.7, ease: "power3.out" }, 9.15);
+
+      // Typing: one character every 0.09s; keypress SFX are thinned to a few.
+      firstChars.forEach((s, i) => tl.set(s, { opacity: 1 }, 10.05 + i * 0.09));
+      lastChars.forEach((s, i) => tl.set(s, { opacity: 1 }, 10.95 + i * 0.09));
+
+      // Cursor travels to Save and clicks.
+      // Save centre on screen: form left 1150 + 578 + 28 = 1756, top 30 + 871 + 19 = 920.
+      tl.set("#cursor", { x: 1300, y: 520 }, 11.6);
+      tl.fromTo("#cursor", { opacity: 0 }, { opacity: 1, duration: 0.25 }, 11.6);
+      tl.to("#cursor", { x: 1748, y: 912, duration: 0.75, ease: "power2.inOut" }, 11.75);
+      tl.to("#cursor", { scale: 0.85, duration: 0.08, ease: "power1.in", transformOrigin: "10% 10%" }, 12.5);
+      tl.to("#cursor", { scale: 1, duration: 0.12, ease: "power1.out" }, 12.58);
+
+      // Form closes; the tree sharpens with Yasmine in it.
+      tl.to("#form", { opacity: 0, y: 30, scale: 0.96, filter: "blur(6px)", duration: 0.45, ease: "power2.in" }, 12.8);
+      tl.to("#cursor", { opacity: 0, duration: 0.3 }, 12.8);
+      tl.to("#tree-before", { filter: "blur(0px)", opacity: 1, duration: 0.5, ease: "power1.out" }, 12.95);
+      tl.fromTo("#tree-after", { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "power1.inOut" }, 13.15);
+      tl.fromTo("#ring-new", { opacity: 0, scale: 0.9 }, { opacity: 1, scale: 1, duration: 0.45, ease: "back.out(1.8)" }, 13.5);
+      tl.fromTo("#tag-new", { opacity: 0, x: -16 }, { opacity: 1, x: 0, duration: 0.4, ease: "power2.out" }, 13.65);
+
+      // ---------- Scene 4 — The tree grows (16–23), same stage ----------
+      tl.to(["#caption-a", "#ring-new", "#tag-new"], { opacity: 0, duration: 0.4, ease: "power1.in" }, 15.8);
+      tl.fromTo("#caption-b", { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.6, ease: "power3.out" }, 16.2);
+      // beat-grid (every other beat): gen 1 at 17.47 (beat-locked strong cue), gen 2 at 18.56, gen 3 at 19.66
+      tl.fromTo("#gen1", { opacity: 0, x: -24 }, { opacity: 1, x: 0, duration: 0.45, ease: "power2.out" }, 17.47);
+      tl.fromTo("#gen2", { opacity: 0, x: -24 }, { opacity: 1, x: 0, duration: 0.45, ease: "power2.out" }, 18.56);
+      tl.fromTo("#gen3", { opacity: 0, x: -24 }, { opacity: 1, x: 0, duration: 0.45, ease: "power2.out" }, 19.66);
+      // Punch in on the memorial card (Ahmed Benali, 1948 - 2015, olive-branch mark).
+      tl.to(["#caption-b", "#gen1", "#gen2", "#gen3"], { opacity: 0, duration: 0.35, ease: "power1.in" }, 20.6);
+      tl.to("#stage-tree", { scale: 2.1, x: 86, y: 300, duration: 1.0, ease: "power2.inOut" }, 20.75);
+      tl.fromTo("#memory-note", { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.5, ease: "power2.out" }, 21.35);
+
+      // ---------- Scene 5 — Search by relation, in Arabic (23–28) ----------
+      crossfade("#s3", "#s5", 22.7);
+      // Camera starts close on the search pill: pill centre (1445, 40) → screen (960, 300) at 2x.
+      tl.fromTo("#cam5", { scale: 2, x: -1930, y: 220 }, { scale: 2, x: -1930, y: 220, duration: 0.1 }, 23.0);
+      tl.set("#q1", { opacity: 1 }, 23.65);
+      tl.set("#q1", { opacity: 0 }, 23.95);
+      tl.set("#q2", { opacity: 1 }, 23.95);
+      tl.set("#q2", { opacity: 0 }, 24.25);
+      tl.set("#q3", { opacity: 1 }, 24.25);
+      // beat-locked: 24.56 — the result lands, camera pulls back to the whole app.
+      tl.to("#ar-after", { opacity: 1, duration: 0.35, ease: "power1.inOut" }, 24.5);
+      tl.to(["#search-cover", "#query"], { opacity: 0, duration: 0.3 }, 24.56);
+      tl.to("#cam5", { scale: 1, x: 0, y: 0, duration: 0.9, ease: "power2.inOut" }, 24.56);
+      tl.fromTo("#ring-fatima", { opacity: 0, scale: 0.9 }, { opacity: 1, scale: 1, duration: 0.45, ease: "back.out(1.8)" }, 25.3);
+      tl.fromTo("#cap5", { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.55, ease: "power3.out" }, 25.2);
+
+      // ---------- Scene 6 — Birthdays (28–33) ----------
+      crossfade("#s5", "#s6", 27.7);
+      tl.fromTo("#s6 h2", { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.6, ease: "power3.out" }, 28.2);
+      tl.fromTo("#s6 .copy p", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.5, ease: "power2.out" }, 28.5);
+      tl.fromTo("#bday", { opacity: 0, y: 60 }, { opacity: 1, y: 0, duration: 0.7, ease: "power3.out" }, 28.6);
+      tl.fromTo("#chip-glow", { opacity: 0, scale: 0.92 }, { opacity: 1, scale: 1, duration: 0.5, ease: "back.out(1.6)" }, 29.4);
+      tl.fromTo("#cake", { opacity: 0, y: 30, rotation: -6 }, { opacity: 1, y: 0, rotation: 0, duration: 0.7, ease: "back.out(1.4)" }, 29.45);
+      tl.fromTo("#next-glow", { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "power2.out" }, 30.7);
+
+      // ---------- Scene 7 — Keeps it with you (33–37.6) ----------
+      crossfade("#s6", "#s7", 32.7);
+      tl.fromTo("#s7 h2", { opacity: 0, y: 26 }, { opacity: 1, y: 0, duration: 0.6, ease: "power3.out" }, 33.0);
+      // beat-grid (every other beat): 33.29, 34.38, 35.47 — text cards need the 1.1s spacing to be read
+      ["#c1", "#c2", "#c3"].forEach((id, i) => {
+        tl.fromTo(id, { opacity: 0, y: 50 }, { opacity: 1, y: 0, duration: 0.55, ease: "power3.out" }, [33.29, 34.38, 35.47][i]);
+      });
+
+      // ---------- Scene 8 — Outro (37.6–40) ----------
+      crossfade("#s7", "#s8", 37.3);
+      // beat-locked: 38.2 — logo lands on the strong cue
+      tl.fromTo("#logo", { opacity: 0, scale: 0.6, y: 20 }, { opacity: 1, scale: 1, y: 0, duration: 0.6, ease: "back.out(1.7)" }, 37.95);
+      tl.fromTo("#out-name", { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, 38.15);
+      tl.fromTo("#out-ar", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, 38.3);
+      tl.fromTo("#out-tag", { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "power1.out" }, 38.45);
+
+      // ---------- Audio-reactive: the warm glow (and the outro halo) breathe with the music ----------
+      const glow = document.getElementById("glow");
+      const halo = document.getElementById("halo");
+      const frames = Math.min(window.AUDIO_RMS.length, 40 * window.AUDIO_FPS);
+      for (let f = 0; f < frames; f++) {
+        const rms = window.AUDIO_RMS[f];
+        const bass = window.AUDIO_BASS[f];
+        tl.call(() => {
+          gsap.set(glow, { scale: 1 + bass * 0.08, opacity: 0.5 + rms * 0.35 });
+          gsap.set(halo, { scale: 1 + bass * 0.12, opacity: 0.6 + rms * 0.4 });
+        }, [], f / window.AUDIO_FPS);
+      }
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

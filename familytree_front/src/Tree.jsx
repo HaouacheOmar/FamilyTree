@@ -1,16 +1,37 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TREE_COPY } from './i18n';
+import { ChevronDown, OLIVE_BRANCH_PATHS } from './icons';
+
+const BIOLOGICAL_PARENT_KEYS = ['mother', 'father'];
+const ADOPTIVE_PARENT_KEYS = ['adoptive_mother', 'adoptive_father'];
+
+function getIds(person, keys) {
+  return Array.from(new Set(keys.map(key => person[key]).filter(Boolean).map(String)));
+}
+
+function getFullName(person) {
+  return `${person.first_name || ''} ${person.last_name || ''}`.trim() || 'Unnamed';
+}
+
+// Dates arrive as YYYY-MM-DD; slicing avoids new Date() shifting Jan 1 into the previous year west of UTC.
+function getLifespan(person) {
+  const birthYear = person.birth_date?.slice(0, 4);
+  if (!birthYear) return '';
+  const deathYear = person.death_date?.slice(0, 4);
+  return deathYear ? `${birthYear} - ${deathYear}` : `* ${birthYear}`;
+}
 
 function buildTreeData(people) {
   const familyByUnion = {};
   const personToFamily = {};
 
   people.forEach(p => {
-    const id = String(p.id); 
+    const id = String(p.id);
     const famId = `fam-${id}`;
-    
+
     familyByUnion[famId] = { id: famId, parents: [p], children: [] };
     personToFamily[id] = familyByUnion[famId];
   });
@@ -26,7 +47,7 @@ function buildTreeData(people) {
       const myId = String(p.id);
       const myFam = personToFamily[myId];
       const spouseFam = personToFamily[partnerId];
-      
+
       if (myFam && spouseFam && myFam.id !== spouseFam.id) {
         const newFamId = `union-${myId}-${partnerId}`;
         const mergedParents = Array.from(new Set([...myFam.parents, ...spouseFam.parents]));
@@ -43,14 +64,7 @@ function buildTreeData(people) {
     });
   });
 
-  people.forEach(p => {
-    const parentIds = Array.from(new Set([
-      p.mother,
-      p.father,
-      p.adoptive_mother,
-      p.adoptive_father,
-    ].filter(Boolean).map(String)));
-
+  const mergeParentCouple = (parentIds) => {
     if (parentIds.length < 2) return;
 
     const existingFamilies = parentIds
@@ -78,6 +92,11 @@ function buildTreeData(people) {
     uniqueFamilies.forEach(family => {
       delete familyByUnion[family.id];
     });
+  };
+
+  people.forEach(p => {
+    mergeParentCouple(getIds(p, BIOLOGICAL_PARENT_KEYS));
+    mergeParentCouple(getIds(p, ADOPTIVE_PARENT_KEYS));
   });
 
   const extraLinks = [];
@@ -86,12 +105,7 @@ function buildTreeData(people) {
     const childFam = personToFamily[childId];
     if (!childFam) return;
 
-    const parentIds = Array.from(new Set([
-      p.mother,
-      p.father,
-      p.adoptive_mother,
-      p.adoptive_father,
-    ].filter(Boolean).map(String)));
+    const parentIds = getIds(p, [...BIOLOGICAL_PARENT_KEYS, ...ADOPTIVE_PARENT_KEYS]);
 
     parentIds.forEach((parentId, index) => {
       const parentFam = personToFamily[parentId];
@@ -110,82 +124,7 @@ function buildTreeData(people) {
 
   const rootFamilies = Object.values(familyByUnion).filter(fam => !fam.hasParentFamily);
 
-  return { isVirtual: true, id: "Root", children: rootFamilies, extraLinks };
-}
-
-function drawNodeShape(group, opts) {
-  const { shape, radius, fill, stroke, strokeWidth, filter } = opts;
-
-  if (shape === 'capsule') {
-    const width = radius * 2.4;
-    const height = radius * 1.45;
-    const corner = height / 2;
-
-    group.append('rect')
-      .attr('x', -width / 2)
-      .attr('y', -height / 2)
-      .attr('width', width)
-      .attr('height', height)
-      .attr('rx', corner)
-      .attr('ry', corner)
-      .attr('fill', fill)
-      .attr('stroke', stroke)
-      .attr('stroke-width', strokeWidth)
-      .style('filter', filter);
-    return;
-  }
-
-  if (shape === 'hexagon') {
-    const hexPoints = [
-      [-radius * 0.9, 0],
-      [-radius * 0.45, -radius * 0.78],
-      [radius * 0.45, -radius * 0.78],
-      [radius * 0.9, 0],
-      [radius * 0.45, radius * 0.78],
-      [-radius * 0.45, radius * 0.78],
-    ].map(([x, y]) => `${x},${y}`).join(' ');
-
-    group.append('polygon')
-      .attr('points', hexPoints)
-      .attr('fill', fill)
-      .attr('stroke', stroke)
-      .attr('stroke-width', strokeWidth)
-      .style('filter', filter);
-    return;
-  }
-
-  if (shape === 'square' || shape === 'rounded') {
-    group.append('rect')
-      .attr('x', -radius)
-      .attr('y', -radius)
-      .attr('width', radius * 2)
-      .attr('height', radius * 2)
-      .attr('rx', shape === 'rounded' ? 18 : 2)
-      .attr('ry', shape === 'rounded' ? 18 : 2)
-      .attr('fill', fill)
-      .attr('stroke', stroke)
-      .attr('stroke-width', strokeWidth)
-      .style('filter', filter);
-    return;
-  }
-
-  if (shape === 'diamond') {
-    const points = `0,${-radius} ${radius},0 0,${radius} ${-radius},0`;
-    group.append('polygon')
-      .attr('points', points)
-      .attr('fill', fill)
-      .attr('stroke', stroke)
-      .attr('stroke-width', strokeWidth)
-      .style('filter', filter);
-    return;
-  }
-
-  group.append('circle')
-    .attr('r', radius)
-    .attr('fill', fill)
-    .attr('stroke', stroke)
-    .attr('stroke-width', strokeWidth)
-    .style('filter', filter);
+  return { id: "Root", children: rootFamilies, extraLinks };
 }
 
 function createNameSprite(text, options = {}) {
@@ -578,6 +517,7 @@ function renderThreeTree({
   const clickableMeshes = [];
   const focusAnchors = new Map();
   const structureEntries = [];
+  let isDisposed = false;
   const textureLoader = new THREE.TextureLoader();
   textureLoader.setCrossOrigin('anonymous');
   const baseNodeGeometry = createNodeGeometry(nodeShape, nodeRadius, isCompact);
@@ -625,6 +565,10 @@ function renderThreeTree({
         textureLoader.load(
           person.photo_url,
           (texture) => {
+            if (isDisposed) {
+              texture.dispose(); // finished loading after this scene was torn down
+              return;
+            }
             texture.colorSpace = THREE.SRGBColorSpace;
             material.map = texture;
             material.color.set(0xffffff);
@@ -666,23 +610,13 @@ function renderThreeTree({
         sceneGroup.add(marker);
       }
 
-      const fullName = `${person.first_name || ''} ${person.last_name || ''}`.trim() || 'Unnamed';
+      const fullName = getFullName(person);
       const personId = String(person.id);
       if (!focusAnchors.has(personId)) {
         focusAnchors.set(personId, { mesh, depth: node.depth, label: fullName });
         structureEntries.push({ id: personId, label: fullName, depth: node.depth, photoUrl: person.photo_url || '' });
       }
-      const subtitle = person.birth_date
-        ? (() => {
-          const birthYear = new Date(person.birth_date).getFullYear();
-          const deathYear = isDeceased ? new Date(person.death_date).getFullYear() : null;
-          if (!Number.isFinite(birthYear)) return '';
-          if (isDeceased && Number.isFinite(deathYear)) {
-            return `${birthYear} - ${deathYear}`;
-          }
-          return `* ${birthYear}`;
-        })()
-        : '';
+      const subtitle = getLifespan(person);
       const nameSprite = createNameSprite(fullName, {
         borderColor: isDeceased ? 'rgba(31, 41, 55, 0.5)' : 'rgba(59, 130, 246, 0.38)',
         subtitle: labelDensityMode === 'names-only' ? '' : subtitle,
@@ -827,6 +761,7 @@ function renderThreeTree({
   animate();
 
   return () => {
+    isDisposed = true;
     window.cancelAnimationFrame(animationFrameId);
     resizeObserver.disconnect();
     renderer.domElement.removeEventListener('pointermove', handlePointerMove);
@@ -840,6 +775,7 @@ function renderThreeTree({
     controls.dispose();
     disposeSceneGraph(sceneGroup);
     renderer.dispose();
+    renderer.forceContextLoss(); // free the WebGL context now; Chromium caps live contexts
     if (renderer.domElement.parentNode === container) {
       container.removeChild(renderer.domElement);
     }
@@ -856,15 +792,7 @@ export default function FamilyTree({ people, onSelect, language, backgroundColor
   const isRtlLanguage = language === 'ar';
   const horizontalFlowDirection = isRtlLanguage ? -1 : 1;
 
-  const structurePanelTitle = language === 'ar'
-    ? 'هيكل الشجرة'
-    : (language === 'fr' ? 'Structure de l\'arbre' : 'Tree Structure');
-  const structureHideLabel = language === 'ar'
-    ? 'اخفاء'
-    : (language === 'fr' ? 'Masquer' : 'Hide');
-  const structureShowLabel = language === 'ar'
-    ? 'اظهار الهيكل'
-    : (language === 'fr' ? 'Afficher la structure' : 'Show Structure');
+  const { structureTitle: structurePanelTitle, structureHide: structureHideLabel, structureShow: structureShowLabel } = TREE_COPY[language];
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -910,8 +838,8 @@ export default function FamilyTree({ people, onSelect, language, backgroundColor
     }
 
     const data = buildTreeData(people);
-    
-    const nodeWidth = 320; 
+
+    const nodeWidth = 320;
     const nodeHeight = 320; // Increased height to accommodate dates
     const width = containerSize.width || container.clientWidth || 1000;
     const height = containerSize.height || container.clientHeight || 700;
@@ -950,12 +878,23 @@ export default function FamilyTree({ people, onSelect, language, backgroundColor
 
     const g = svg.append("g");
 
+    // Explicit extent: d3's default reads the SVG's "100%" width, which throws while the container is hidden.
     const zoom = d3.zoom()
+      .extent([[0, 0], [width, height]])
       .scaleExtent([0.2, 2])
       .on("zoom", (event) => g.attr("transform", event.transform));
     svg.call(zoom);
 
-    const treeLayout = d3.tree().nodeSize([nodeWidth, nodeHeight]);
+    // Partners in one family sit side by side, so a family is wider than one card. Separate neighbours by their
+    // real extents (in the layout's breadth axis) so couples never overlap the next family.
+    const isHorizontalLayout = treeOrientation === 'horizontal';
+    const partnerSpacing = isHorizontalLayout ? 170 : 290;
+    const cardBreadth = isHorizontalLayout ? cardHeight : cardWidth;
+    const familyHalfBreadth = node => ((Math.max(1, node.data.parents?.length || 1) - 1) * partnerSpacing + cardBreadth) / 2;
+    const familyGap = 40;
+    const treeLayout = d3.tree()
+      .nodeSize([nodeWidth, nodeHeight])
+      .separation((a, b) => (familyHalfBreadth(a) + familyHalfBreadth(b) + familyGap) / nodeWidth);
     const rootD3 = d3.hierarchy(data, d => d.children);
     treeLayout(rootD3);
 
@@ -969,7 +908,7 @@ export default function FamilyTree({ people, onSelect, language, backgroundColor
         const id = String(person.id);
         if (structureSeen.has(id)) return;
         structureSeen.add(id);
-        const label = `${person.first_name || ''} ${person.last_name || ''}`.trim() || 'Unnamed';
+        const label = getFullName(person);
         structureEntries.push({ id, label, depth: node.depth, photoUrl: person.photo_url || '' });
       });
     });
@@ -996,14 +935,14 @@ export default function FamilyTree({ people, onSelect, language, backgroundColor
 
     const extraLinkData = (data.extraLinks || [])
       .map(link => ({ source: nodeMap[link.sourceFam], target: nodeMap[link.targetFam] }))
-      .filter(l => l.source && l.target); 
+      .filter(l => l.source && l.target);
 
     g.selectAll(".link")
-      .data(rootD3.links().filter(l => l.source.depth > 0)) 
+      .data(rootD3.links().filter(l => l.source.depth > 0))
       .enter()
       .insert("path", "g")
       .attr("fill", "none")
-      .attr("stroke", "#d1c4ae")
+      .style("stroke", "var(--tree-link)")
       .attr("stroke-width", 2)
       .attr("d", d => {
         const source = getNodePosition(d.source);
@@ -1022,9 +961,9 @@ export default function FamilyTree({ people, onSelect, language, backgroundColor
       .enter()
       .insert("path", "g")
       .attr("fill", "none")
-      .attr("stroke", "#d1c4ae")
+      .style("stroke", "var(--tree-link)")
       .attr("stroke-width", 2)
-      .attr("stroke-dasharray", "5,5") 
+      .attr("stroke-dasharray", "5,5")
       .attr("d", d => {
         const source = getNodePosition(d.source);
         const target = getNodePosition(d.target);
@@ -1049,8 +988,7 @@ export default function FamilyTree({ people, onSelect, language, backgroundColor
     nodes.each(function(d) {
       const group = d3.select(this);
       const parents = d.data.parents;
-      const isHorizontalLayout = treeOrientation === 'horizontal';
-      const spacing = isHorizontalLayout ? 170 : 290;
+      const spacing = partnerSpacing;
       const startOffset = -((parents.length - 1) * spacing) / 2;
       const nodePosition = getNodePosition(d);
 
@@ -1068,7 +1006,7 @@ export default function FamilyTree({ people, onSelect, language, backgroundColor
           .attr('y1', first.localY)
           .attr('x2', last.localX)
           .attr('y2', last.localY)
-          .attr('stroke', '#d97c7c')
+          .style('stroke', 'var(--tree-couple-link)')
           .attr('stroke-width', 2)
           .attr('stroke-linecap', 'round')
           .attr('opacity', 0.92);
@@ -1088,8 +1026,7 @@ export default function FamilyTree({ people, onSelect, language, backgroundColor
 
         const isDeceased = !!person.death_date;
         const isBirthdayToday = birthdayPersonIds.has(String(person.id));
-        const cardFill = isDeceased ? '#ebedf0' : (person.gender === 'M' ? '#d7ebf8' : '#f4efdf');
-        const cardStroke = isDeceased ? '#2f3135' : (person.gender === 'M' ? '#7faec7' : '#d4c5aa');
+        const cardTone = isDeceased ? 'deceased' : ({ M: 'male', F: 'female' }[person.gender] || 'other');
 
         pGroup.append("rect")
           .attr("x", -cardWidth / 2)
@@ -1098,9 +1035,9 @@ export default function FamilyTree({ people, onSelect, language, backgroundColor
           .attr("height", cardHeight)
           .attr("rx", 14)
           .attr("ry", 14)
-          .attr("fill", cardFill)
-          .attr("stroke", cardStroke)
-          .attr("stroke-width", isDeceased ? 2.6 : 1.8)
+          .style("fill", `var(--tree-card-${cardTone})`)
+          .style("stroke", `var(--tree-card-${cardTone}-border)`)
+          .attr("stroke-width", 1.5)
           .style("filter", "url(#card-shadow)");
 
         if (isBirthdayToday) {
@@ -1108,11 +1045,11 @@ export default function FamilyTree({ people, onSelect, language, backgroundColor
             .attr('cx', (cardWidth / 2) - 16)
             .attr('cy', (-cardHeight / 2) + 16)
             .attr('r', 8)
-            .attr('fill', '#f59e0b')
+            .style('fill', 'var(--color-accent)')
             .attr('stroke', '#ffffff')
             .attr('stroke-width', 2);
         }
-        
+
         const photoCenterX = -cardWidth / 2 + 34;
         const photoCenterY = 0;
 
@@ -1123,13 +1060,13 @@ export default function FamilyTree({ people, onSelect, language, backgroundColor
               .attr("id", pId)
               .attr("width", 1)
               .attr("height", 1)
-              .attr("patternUnits", "objectBoundingBox") 
+              .attr("patternUnits", "objectBoundingBox")
               .append("image")
               .attr("href", person.photo_url)
               .attr("width", avatarRadius * 2)
               .attr("height", avatarRadius * 2)
               .attr("x", 0).attr("y", 0)
-              .attr("preserveAspectRatio", "xMidYMid slice"); 
+              .attr("preserveAspectRatio", "xMidYMid slice");
           }
 
           pGroup.append('circle')
@@ -1145,54 +1082,56 @@ export default function FamilyTree({ people, onSelect, language, backgroundColor
             .attr('cx', photoCenterX)
             .attr('cy', photoCenterY)
             .attr('r', avatarRadius)
-            .attr('fill', isDeceased ? '#d4d7dc' : '#cdd7e2')
+            .style('fill', `var(--tree-card-${cardTone}-border)`)
             .attr('stroke', '#ffffff')
             .attr('stroke-width', 2.5)
             .style('filter', 'url(#shadow)');
         }
 
         if (isDeceased) {
-          pGroup.append("text")
-            .attr("dx", (cardWidth / 2) - 12)
-            .attr("dy", (-cardHeight / 2) + 18)
-            .attr("text-anchor", "middle")
-            .style("font-size", "18px") 
-            .text("💀"); 
+          // Olive branch "in memory" mark, top inline-end corner of the card.
+          const mark = pGroup.append("g")
+            .attr("transform", `translate(${(cardWidth / 2) - 26}, ${(-cardHeight / 2) + 6}) scale(0.75)`)
+            .attr("fill", "none")
+            .style("stroke", "var(--tree-text-deceased)")
+            .attr("stroke-width", 2)
+            .attr("stroke-linecap", "round")
+            .attr("stroke-linejoin", "round");
+          OLIVE_BRANCH_PATHS.forEach(d => mark.append("path").attr("d", d));
         }
-        
-        const fullName = `${person.first_name || ''} ${person.last_name || ''}`.trim() || 'Unnamed';
+
+        const fullName = getFullName(person);
         const textStartX = -cardWidth / 2 + 66;
         pGroup.append("text")
           .attr("x", textStartX)
           .attr("y", -2)
           .attr("text-anchor", "start")
           .style("font-size", "15px")
-          .style("font-weight", "700")
-          .style("fill", isDeceased ? "#3f3f46" : "#111827")
+          .style("font-weight", "600")
+          .style("fill", isDeceased ? "var(--tree-text-deceased)" : "var(--color-text)")
           .text(fullName);
-          
-        if (person.birth_date) {
-            const birthYear = new Date(person.birth_date).getFullYear();
-            const deathYear = isDeceased ? new Date(person.death_date).getFullYear() : '';
-            const lifespan = isDeceased ? `${birthYear} - ${deathYear}` : `* ${birthYear}`;
-            
+
+        const lifespan = getLifespan(person);
+        if (lifespan) {
+
             pGroup.append("text")
               .attr("x", textStartX)
               .attr("y", 20)
               .attr("text-anchor", "start")
               .style("font-size", "12px")
-              .style("fill", "#374151")
+              .style("fill", "var(--color-text-muted)")
               .text(lifespan);
         }
       });
     });
 
-    if (treeOrientation === 'horizontal') {
-      const horizontalStartX = horizontalFlowDirection === 1 ? 80 : width - 80;
-      svg.call(zoom.transform, d3.zoomIdentity.translate(horizontalStartX, height / 2).scale(0.8));
-    } else {
-      svg.call(zoom.transform, d3.zoomIdentity.translate(width / 2, 80).scale(0.8));
-    }
+    const bounds = g.node().getBBox();
+    const padding = 48;
+    const fitScale = Math.min(1, (width - padding) / bounds.width, (height - padding) / bounds.height);
+    const scale = Math.max(0.2, fitScale);
+    svg.call(zoom.transform, d3.zoomIdentity
+      .translate((width / 2) - ((bounds.x + bounds.width / 2) * scale), (height / 2) - ((bounds.y + bounds.height / 2) * scale))
+      .scale(scale));
 
     return () => {
       focusPersonRef.current = null;
@@ -1201,21 +1140,9 @@ export default function FamilyTree({ people, onSelect, language, backgroundColor
   }, [people, onSelect, backgroundColor, nodeShape, treeOrientation, treeRenderMode, threeLabelDensity, treeRenderMode === '2d' ? containerSize : null, birthdayPersonIds, horizontalFlowDirection]);
 
   return (
-    <div
-      className="tree-layout-shell"
-      style={{
-        width: '100%',
-        position: 'relative',
-        display: 'grid',
-        gridTemplateColumns: structureItems.length > 0 && isStructurePanelOpen
-          ? (isRtlLanguage ? 'minmax(0, 1fr) minmax(220px, 300px)' : 'minmax(220px, 300px) minmax(0, 1fr)')
-          : 'minmax(0, 1fr)',
-        gap: '12px',
-        alignItems: 'stretch',
-      }}
-    >
+    <div className={`tree-layout-shell ${structureItems.length > 0 && isStructurePanelOpen ? 'has-structure' : ''}`}>
       {structureItems.length > 0 && isStructurePanelOpen && (
-        <aside className="structure-panel" style={{ order: isRtlLanguage ? 2 : 1 }}>
+        <aside className="structure-panel">
           <div className="structure-panel-header">
             <div className="structure-panel-title">
               {structurePanelTitle}
@@ -1227,7 +1154,7 @@ export default function FamilyTree({ people, onSelect, language, backgroundColor
               title={structureHideLabel}
               aria-label={structureHideLabel}
             >
-              <span className="advanced-card-toggle-icon">▾</span>
+              <span className="advanced-card-toggle-icon"><ChevronDown /></span>
             </button>
           </div>
 
@@ -1241,14 +1168,7 @@ export default function FamilyTree({ people, onSelect, language, backgroundColor
                   setActiveStructureId(item.id);
                 }}
                 className={`shape-btn structure-panel-item ${activeStructureId === item.id ? 'active' : ''} ${item.depth > 1 ? 'has-depth' : ''}`}
-                style={{
-                  justifyContent: isRtlLanguage ? 'flex-end' : 'flex-start',
-                  width: '100%',
-                  textAlign: isRtlLanguage ? 'right' : 'left',
-                  '--depth-level': Math.max(0, item.depth - 1),
-                  paddingLeft: isRtlLanguage ? '12px' : `${16 + (Math.max(0, item.depth - 1) * 14)}px`,
-                  paddingRight: isRtlLanguage ? `${16 + (Math.max(0, item.depth - 1) * 14)}px` : '12px',
-                }}
+                style={{ '--depth-level': Math.max(0, item.depth - 1) }}
               >
                 <span className="structure-node-branch" />
                 {item.photoUrl
@@ -1262,7 +1182,7 @@ export default function FamilyTree({ people, onSelect, language, backgroundColor
       )}
 
       {structureItems.length > 0 && !isStructurePanelOpen && (
-        <div className="structure-panel-reopen-wrap" style={{ left: isRtlLanguage ? 'auto' : '8px', right: isRtlLanguage ? '8px' : 'auto' }}>
+        <div className="structure-panel-reopen-wrap">
           <button
             type="button"
             className="advanced-card-toggle structure-panel-reopen-btn"
@@ -1270,7 +1190,7 @@ export default function FamilyTree({ people, onSelect, language, backgroundColor
             title={structureShowLabel}
             aria-label={structureShowLabel}
           >
-            <span className="advanced-card-toggle-icon is-collapsed">▾</span>
+            <span className="advanced-card-toggle-icon is-collapsed"><ChevronDown /></span>
           </button>
         </div>
       )}
@@ -1278,7 +1198,7 @@ export default function FamilyTree({ people, onSelect, language, backgroundColor
       <div
         ref={containerRef}
         className="tree-container"
-        style={{ width: '100%', height: 'clamp(440px, 75vh, 860px)', position: 'relative', '--tree-bg': backgroundColor, order: isRtlLanguage ? 1 : 2 }}
+        style={{ '--tree-bg': backgroundColor }}
       />
     </div>
   );

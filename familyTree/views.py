@@ -1,41 +1,43 @@
-from collections import defaultdict
+from collections import defaultdict, deque
+from contextlib import closing
 from datetime import date
 from difflib import SequenceMatcher
-from collections import deque
 from pathlib import Path
 import io
 import os
 import re
 import shutil
+import sqlite3
 import tempfile
 import zipfile
 
 from django.conf import settings
-from django.db import connection, transaction
+from django.core.management import call_command
+from django.core.serializers.base import DeserializationError
+from django.db import IntegrityError, connection, connections, transaction
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
-from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, parser_classes
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
+from . import gedcom
 from .models import Person, PersonMedia, Relationship
 from .serializers import PersonMediaSerializer, PersonSerializer, RelationshipSerializer
-
-
-def _db_path() -> Path:
-	return Path(settings.DATABASES["default"]["NAME"])
 
 
 def _safe_extract_zip(zip_ref: zipfile.ZipFile, extract_dir: Path) -> None:
 	extract_dir = extract_dir.resolve()
 	for member in zip_ref.infolist():
-		target = (extract_dir / member.filename).resolve()
-		if not str(target).startswith(str(extract_dir)):
+		if not (extract_dir / member.filename).resolve().is_relative_to(extract_dir):
 			raise ValueError("Invalid archive structure")
 	zip_ref.extractall(extract_dir)
+
+
+def _age(birth_date, on_date):
+	return on_date.year - birth_date.year - ((on_date.month, on_date.day) < (birth_date.month, birth_date.day))
 
 
 def _parse_date_param(raw_value):
@@ -63,20 +65,11 @@ def _build_family_adjacency(people, relationships):
 	graph = defaultdict(set)
 
 	for person in people:
-		pid = person.id
-		for linked_id in (
-			person.mother_id,
-			person.father_id,
-			person.adoptive_mother_id,
-			person.adoptive_father_id,
-			person.spouse_id,
-			person.husband_id,
-			person.wife_id,
-		):
-			if not linked_id:
-				continue
-			graph[pid].add(linked_id)
-			graph[linked_id].add(pid)
+		for field in Person.LINK_FIELDS:
+			linked_id = getattr(person, f"{field}_id")
+			if linked_id:
+				graph[person.id].add(linked_id)
+				graph[linked_id].add(person.id)
 
 	for relationship in relationships:
 		graph[relationship.person1_id].add(relationship.person2_id)
@@ -108,18 +101,12 @@ def _collect_branch_ids(root_id, graph, depth_limit=None):
 	return visited
 
 
-def _name_similarity(left, right):
-	left_normalized = _normalize_text(left)
-	right_normalized = _normalize_text(right)
-	if not left_normalized or not right_normalized:
-		return 0.0
-	if left_normalized == right_normalized:
-		return 1.0
-	return SequenceMatcher(None, left_normalized, right_normalized).ratio()
+MIN_NAME_SIMILARITY = 0.68  # below this two names are never offered as duplicates
+MAX_DUPLICATE_BONUS = 0.26 + 0.08  # same birth date + same birth place
 
 
 class PersonViewSet(viewsets.ModelViewSet):
-	queryset = Person.objects.all()
+	queryset = Person.objects.select_related(*Person.LINK_FIELDS)
 	serializer_class = PersonSerializer
 	parser_classes = [MultiPartParser, FormParser, JSONParser]
 
@@ -153,16 +140,32 @@ class PersonViewSet(viewsets.ModelViewSet):
 		"uncles": "uncle",
 		"wives": "wife",
 		"lastname": "last_name",
+		# Arabic (the UI defaults to Arabic)
+		"أم": "mother", "ام": "mother", "أمهات": "mother",
+		"أب": "father", "اب": "father", "آباء": "father",
+		"ابن": "son", "ابنة": "daughter", "أبناء": "child", "بنات": "daughter",
+		"أخ": "brother", "اخ": "brother", "أخت": "sister", "اخت": "sister",
+		"إخوة": "sibling", "اخوة": "sibling", "أخوات": "sister",
+		"زوج": "husband", "زوجة": "wife", "أزواج": "spouse", "شريك": "partner", "شريكة": "partner",
+		"جد": "grandpa", "جدة": "grandma", "أجداد": "grandparent",
+		"حفيد": "grandchild", "حفيدة": "grandchild", "أحفاد": "grandchild",
+		"عمة": "aunt", "عمات": "aunt", "خالة": "aunt", "خالات": "aunt",
+		"عم": "uncle", "أعمام": "uncle", "خال": "uncle", "أخوال": "uncle",
+		"ابن_عم": "cousin", "ابن_خال": "cousin",
+		"قريب": "relative", "أقارب": "relative",
+		"لقب": "last_name", "العائلة": "last_name",
 	}
 	IGNORED_SEARCH_WORDS = {
 		"all",
 		"and",
 		"by",
 		"family",
+		"last_name",
 		"name",
 		"relation",
 		"relationships",
 		"relative",
+		"و", "كل", "حسب", "اسم", "الاسم", "العلاقات", "علاقة",
 	}
 
 	def _normalize_search_tokens(self, raw_query):
@@ -188,20 +191,13 @@ class PersonViewSet(viewsets.ModelViewSet):
 		partners_by_person = defaultdict(set)
 
 		for person in people:
-			parent_ids = {
-				pid for pid in (
-					person.mother_id,
-					person.father_id,
-					person.adoptive_mother_id,
-					person.adoptive_father_id,
-				)
-				if pid
-			}
+			parent_ids = {getattr(person, f"{field}_id") for field in Person.PARENT_FIELDS} - {None}
 			parents_by_person[person.id] = parent_ids
 			for pid in parent_ids:
 				children_by_parent[pid].add(person.id)
 
-			for partner_id in (person.spouse_id, person.husband_id, person.wife_id):
+			for field in Person.PARTNER_FIELDS:
+				partner_id = getattr(person, f"{field}_id")
 				if partner_id:
 					partners_by_person[person.id].add(partner_id)
 					partners_by_person[partner_id].add(person.id)
@@ -343,9 +339,6 @@ class PersonViewSet(viewsets.ModelViewSet):
 
 		total_score = 0
 		for token in tokens:
-			if token == "last_name":
-				continue
-
 			token_normalized = _normalize_text(token)
 			token_score = 0
 
@@ -369,87 +362,77 @@ class PersonViewSet(viewsets.ModelViewSet):
 		return total_score
 
 	def _detect_duplicate_pairs(self, people, threshold):
-		pairs = []
-		normalized = {
-			person.id: {
-				"full_name": _normalize_text(f"{person.first_name} {person.last_name}"),
-				"first_name": _normalize_text(person.first_name),
-				"last_name": _normalize_text(person.last_name),
-				"birth_place": _normalize_text(person.birth_place),
+		def summary(person):
+			return {
+				"id": person.id,
+				"name": str(person),
+				"birth_date": person.birth_date.isoformat() if person.birth_date else None,
+				"birth_place": person.birth_place,
 			}
-			for person in people
-		}
 
-		for index, left in enumerate(people):
-			left_data = normalized[left.id]
-			for right in people[index + 1:]:
-				right_data = normalized[right.id]
+		# (original position, person, name, place), shortest names first: real_quick_ratio() only depends on the
+		# two lengths, so once a longer name can no longer reach the bar, no later one can either.
+		entries = sorted(
+			(
+				(position, person, _normalize_text(f"{person.first_name} {person.last_name}"), _normalize_text(person.birth_place))
+				for position, person in enumerate(people)
+			),
+			key=lambda entry: len(entry[2]),
+		)
+		entries = [entry for entry in entries if entry[2]]
+		lowest_required = max(MIN_NAME_SIMILARITY, threshold - MAX_DUPLICATE_BONUS)
 
-				name_score = _name_similarity(left_data["full_name"], right_data["full_name"])
-				if name_score < 0.68:
-					continue
+		pairs = []
+		for index, (left_position, left, left_name, left_place) in enumerate(entries):
+			# SequenceMatcher caches work for seq2, so the outer name goes there.
+			matcher = SequenceMatcher(None, autojunk=False)
+			matcher.set_seq2(left_name)
+			for right_position, right, right_name, right_place in entries[index + 1:]:
+				if 2 * len(left_name) / (len(left_name) + len(right_name)) < lowest_required:
+					break
 
-				score = name_score
+				bonus = 0.0
 				if left.birth_date and right.birth_date:
 					if left.birth_date == right.birth_date:
-						score += 0.26
+						bonus += 0.26
 					elif left.birth_date.year == right.birth_date.year:
-						score += 0.1
-				if left_data["birth_place"] and left_data["birth_place"] == right_data["birth_place"]:
-					score += 0.08
+						bonus += 0.1
+				if left_place and left_place == right_place:
+					bonus += 0.08
 
-				if score < threshold:
+				# real_quick_ratio and quick_ratio are cheap, symmetric upper bounds of ratio(): skipping on them never
+				# drops a match.
+				required = max(MIN_NAME_SIMILARITY, threshold - bonus)
+				matcher.set_seq1(right_name)
+				if matcher.real_quick_ratio() < required or matcher.quick_ratio() < required:
+					continue
+				# ratio() itself is asymmetric, so compare in the caller's order (the merge UI keeps the "left" person).
+				if left_position < right_position:
+					first, second, name_score = left, right, SequenceMatcher(None, left_name, right_name, autojunk=False).ratio()
+				else:
+					first, second, name_score = right, left, matcher.ratio()
+				if name_score < required:
 					continue
 
-				pairs.append(
-					{
-						"score": round(min(1.0, score), 3),
-						"left": {
-							"id": left.id,
-							"name": str(left),
-							"birth_date": left.birth_date.isoformat() if left.birth_date else None,
-							"birth_place": left.birth_place,
-						},
-						"right": {
-							"id": right.id,
-							"name": str(right),
-							"birth_date": right.birth_date.isoformat() if right.birth_date else None,
-							"birth_place": right.birth_place,
-						},
-					}
-				)
+				pairs.append({"score": round(min(1.0, name_score + bonus), 3), "left": summary(first), "right": summary(second)})
 
 		pairs.sort(key=lambda item: item["score"], reverse=True)
 		return pairs
 
 	def _merge_person_into(self, primary, duplicate):
-		fill_if_empty_fields = [
-			"birth_date",
-			"death_date",
-			"birth_place",
-			"death_place",
-			"occupation",
-			"mother",
-			"father",
-			"adoptive_mother",
-			"adoptive_father",
-			"spouse",
-			"husband",
-			"wife",
-		]
-
-		if not primary.last_name and duplicate.last_name:
-			primary.last_name = duplicate.last_name
 		if primary.gender == "O" and duplicate.gender in {"M", "F"}:
 			primary.gender = duplicate.gender
-		if not primary.photo and duplicate.photo:
-			primary.photo = duplicate.photo
 
-		for field_name in fill_if_empty_fields:
-			if getattr(primary, field_name) is None and getattr(duplicate, field_name) is not None:
+		fill_if_empty = ["last_name", "photo", "birth_date", "death_date", "birth_place", "death_place", "occupation"]
+		fill_if_empty += [f"{field}_id" for field in Person.LINK_FIELDS]
+		for field_name in fill_if_empty:
+			if not getattr(primary, field_name) and getattr(duplicate, field_name):
 				setattr(primary, field_name, getattr(duplicate, field_name))
-			elif getattr(primary, field_name) == "" and getattr(duplicate, field_name):
-				setattr(primary, field_name, getattr(duplicate, field_name))
+
+		# Neither person may end up linked to themselves or to the soon-deleted duplicate.
+		for field in Person.LINK_FIELDS:
+			if getattr(primary, f"{field}_id") in (primary.id, duplicate.id):
+				setattr(primary, f"{field}_id", None)
 
 		if duplicate.biography:
 			if not primary.biography:
@@ -459,7 +442,7 @@ class PersonViewSet(viewsets.ModelViewSet):
 
 		primary.save()
 
-		for field_name in ["mother", "father", "adoptive_mother", "adoptive_father", "spouse", "husband", "wife"]:
+		for field_name in Person.LINK_FIELDS:
 			Person.objects.exclude(id=primary.id).filter(**{field_name: duplicate}).update(**{field_name: primary})
 
 		for relationship in Relationship.objects.filter(person1=duplicate) | Relationship.objects.filter(person2=duplicate):
@@ -501,24 +484,9 @@ class PersonViewSet(viewsets.ModelViewSet):
 		PersonMedia.objects.filter(person=duplicate).update(person=primary)
 		duplicate.delete()
 
-		for field_name in ["mother", "father", "adoptive_mother", "adoptive_father", "spouse", "husband", "wife"]:
-			if getattr(primary, f"{field_name}_id") == primary.id:
-				setattr(primary, field_name, None)
-		primary.save()
-
 	def list(self, request, *args, **kwargs):
-		people = list(
-			Person.objects.select_related(
-				"mother",
-				"father",
-				"adoptive_mother",
-				"adoptive_father",
-				"spouse",
-				"husband",
-				"wife",
-			).all()
-		)
-		relationships = list(Relationship.objects.select_related("person1", "person2").all())
+		people = list(Person.objects.select_related(*Person.LINK_FIELDS))
+		relationships = list(Relationship.objects.all())
 		family_maps = self._build_family_maps(people, relationships)
 		relation_tags_by_person = family_maps["tags_by_person"]
 		partners_by_person = family_maps["partners_by_person"]
@@ -545,7 +513,7 @@ class PersonViewSet(viewsets.ModelViewSet):
 		limit_raw = request.query_params.get("limit")
 		limit = None
 		if limit_raw and str(limit_raw).isdigit():
-			limit = max(1, min(int(limit_raw), 1000))
+			limit = max(1, int(limit_raw))
 
 		data = []
 		for person in people:
@@ -618,10 +586,11 @@ class PersonViewSet(viewsets.ModelViewSet):
 		if tokens and smart_search:
 			data.sort(key=lambda item: (-item.get("search_score", 0), _normalize_text(item.get("last_name")), _normalize_text(item.get("first_name"))))
 
+		total = len(data)
 		if limit is not None:
 			data = data[:limit]
 
-		return Response(data)
+		return Response(data, headers={"X-Total-Count": str(total)})
 
 	@action(detail=False, methods=["get"])
 	def duplicates(self, request):
@@ -633,22 +602,7 @@ class PersonViewSet(viewsets.ModelViewSet):
 		threshold = max(0.6, min(threshold, 0.98))
 
 		people = list(Person.objects.all().order_by("last_name", "first_name", "id"))
-		pairs = self._detect_duplicate_pairs(people, threshold)
-
-		groups_by_key = defaultdict(list)
-		for pair in pairs:
-			left = pair["left"]
-			right = pair["right"]
-			key = tuple(sorted([left["id"], right["id"]]))
-			groups_by_key[key].append(pair)
-
-		grouped_pairs = []
-		for key, items in groups_by_key.items():
-			best = max(items, key=lambda item: item["score"])
-			grouped_pairs.append(best)
-
-		grouped_pairs.sort(key=lambda item: item["score"], reverse=True)
-		return Response({"threshold": threshold, "pairs": grouped_pairs})
+		return Response({"threshold": threshold, "pairs": self._detect_duplicate_pairs(people, threshold)})
 
 	@action(detail=False, methods=["post"])
 	def merge(self, request):
@@ -694,27 +648,24 @@ class PersonViewSet(viewsets.ModelViewSet):
 		if missing_ids:
 			return Response({"error": "Some duplicate ids do not exist", "missing_ids": missing_ids}, status=status.HTTP_404_NOT_FOUND)
 
-		merged_ids = []
 		with transaction.atomic():
 			for duplicate_id in parsed_duplicate_ids:
-				duplicate = people_map[duplicate_id]
-				self._merge_person_into(primary, duplicate)
-				merged_ids.append(duplicate_id)
+				# Re-fetch both: an earlier merge may have relinked or deleted rows they point to.
+				primary.refresh_from_db()
+				self._merge_person_into(primary, Person.objects.get(id=duplicate_id))
 			primary.refresh_from_db()
 
 		serializer = self.get_serializer(primary, context={"request": request})
 		return Response({
 			"status": "ok",
 			"primary_id": primary.id,
-			"merged_ids": merged_ids,
+			"merged_ids": parsed_duplicate_ids,
 			"person": serializer.data,
 		})
 
 	@action(detail=False, methods=["get"])
 	def birthdays(self, request):
-		today = timezone.localdate()
-		queryset = Person.objects.filter(birth_date__month=today.month, birth_date__day=today.day)
-		serializer = self.get_serializer(queryset, many=True, context={"request": request})
+		serializer = self.get_serializer(Person.birthdays_on(date.today()), many=True)
 		return Response(serializer.data)
 
 
@@ -755,15 +706,9 @@ def stats(request):
 	deceased = sum(1 for person in people if person.death_date)
 	living = total - deceased
 
-	ages = []
-	current_year = timezone.localdate().year
-	for person in people:
-		if not person.birth_date:
-			continue
-		end_year = person.death_date.year if person.death_date else current_year
-		age = end_year - person.birth_date.year
-		if age >= 0:
-			ages.append(age)
+	today = date.today()
+	ages = [_age(person.birth_date, person.death_date or today) for person in people if person.birth_date]
+	ages = [age for age in ages if age >= 0]
 
 	avg_age = round(sum(ages) / len(ages), 1) if ages else None
 	oldest = max(ages) if ages else None
@@ -813,40 +758,9 @@ def timeline(request):
 
 @api_view(["GET"])
 def export_gedcom(request):
-	people = list(Person.objects.all().order_by("id"))
-	lines = [
-		"0 HEAD",
-		"1 SOUR FamilyTreeApp",
-		"1 CHAR UTF-8",
-	]
-
-	person_to_gedcom_id = {}
-	for index, person in enumerate(people, start=1):
-		person_to_gedcom_id[person.id] = f"@I{index}@"
-
-	for person in people:
-		individual_id = person_to_gedcom_id[person.id]
-		lines.append(f"0 {individual_id} INDI")
-		lines.append(f"1 NAME {person.first_name} /{person.last_name}/")
-		if person.gender == "M":
-			lines.append("1 SEX M")
-		elif person.gender == "F":
-			lines.append("1 SEX F")
-		else:
-			lines.append("1 SEX U")
-
-		if person.birth_date:
-			lines.append("1 BIRT")
-			lines.append(f"2 DATE {person.birth_date.isoformat()}")
-		if person.death_date:
-			lines.append("1 DEAT")
-			lines.append(f"2 DATE {person.death_date.isoformat()}")
-
-	lines.append("0 TRLR")
-	content = "\n".join(lines) + "\n"
-
+	content = gedcom.export_gedcom(list(Person.objects.order_by("id")), list(Relationship.objects.all()))
 	response = HttpResponse(content, content_type="text/plain; charset=utf-8")
-	response["Content-Disposition"] = "attachment; filename=family_tree.ged"
+	response["Content-Disposition"] = 'attachment; filename="family_tree.ged"'
 	return response
 
 
@@ -857,75 +771,40 @@ def import_gedcom(request):
 	if not uploaded_file:
 		return Response({"error": "gedcom file is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-	try:
-		raw = uploaded_file.read().decode("utf-8", errors="replace").splitlines()
-	except Exception:
-		return Response({"error": "Invalid GEDCOM file"}, status=status.HTTP_400_BAD_REQUEST)
-
-	entries = []
-	current = None
-
-	for line in raw:
-		parts = line.strip().split(" ", 2)
-		if len(parts) < 2:
-			continue
-		level = parts[0]
-		if level == "0" and len(parts) >= 3 and parts[2] == "INDI":
-			if current:
-				entries.append(current)
-			current = {"first_name": "", "last_name": "", "gender": "O", "birth_date": None, "death_date": None}
-			continue
-		if not current:
-			continue
-
-		tag = parts[1]
-		value = parts[2] if len(parts) > 2 else ""
-		if tag == "NAME":
-			match = re.match(r"^(.*?)\s*/(.*?)/$", value.strip())
-			if match:
-				current["first_name"] = match.group(1).strip()
-				current["last_name"] = match.group(2).strip()
-			else:
-				current["first_name"] = value.strip()
-		elif tag == "SEX":
-			if value == "M":
-				current["gender"] = "M"
-			elif value == "F":
-				current["gender"] = "F"
-			else:
-				current["gender"] = "O"
-		elif tag == "DATE" and len(parts) > 2:
-			try:
-				parsed = date.fromisoformat(value.strip())
-			except ValueError:
-				continue
-			if current.get("_last_event") == "BIRT":
-				current["birth_date"] = parsed
-			elif current.get("_last_event") == "DEAT":
-				current["death_date"] = parsed
-		elif tag in {"BIRT", "DEAT"}:
-			current["_last_event"] = tag
-
-	if current:
-		entries.append(current)
-
-	if not entries:
+	created = gedcom.import_gedcom(uploaded_file.read().decode("utf-8-sig", errors="replace"))
+	if not created:
 		return Response({"error": "No people found in GEDCOM file"}, status=status.HTTP_400_BAD_REQUEST)
-
-	created = 0
-	for entry in entries:
-		if not entry.get("first_name"):
-			continue
-		Person.objects.create(
-			first_name=entry.get("first_name", ""),
-			last_name=entry.get("last_name", ""),
-			gender=entry.get("gender", "O"),
-			birth_date=entry.get("birth_date"),
-			death_date=entry.get("death_date"),
-		)
-		created += 1
-
 	return Response({"status": "ok", "created": created})
+
+
+def _validate_family_db(path):
+	"""Raise sqlite3.DatabaseError unless `path` is an intact SQLite file holding this app's tables."""
+	with closing(sqlite3.connect(path)) as db:
+		if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+			raise sqlite3.DatabaseError("Database integrity check failed")
+		if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (Person._meta.db_table,)).fetchone():
+			raise sqlite3.DatabaseError("Not a FamilyTree database")
+
+
+def _replace_family_data(fixture_path):
+	"""Swap every person, relationship and media record for the contents of a dumpdata fixture, atomically."""
+	with transaction.atomic():
+		PersonMedia.objects.all().delete()
+		Relationship.objects.all().delete()
+		Person.objects.all().delete()
+		call_command("loaddata", str(fixture_path), verbosity=0)  # also resets Postgres id sequences
+
+
+def _sqlite_backup_to_fixture(sqlite_path, fixture_path):
+	"""Read an old SQLite-only backup into a JSON fixture through a temporary second database connection."""
+	alias = "familytree_import"
+	connections.settings[alias] = {**connections.settings["default"], "ENGINE": "django.db.backends.sqlite3", "NAME": str(sqlite_path), "OPTIONS": {}}
+	try:
+		call_command("migrate", database=alias, interactive=False, verbosity=0)  # older backups may predate the schema
+		call_command("dumpdata", "familyTree", database=alias, output=str(fixture_path), verbosity=0)
+	finally:
+		connections[alias].close()
+		del connections.settings[alias]
 
 
 @csrf_exempt
@@ -933,21 +812,26 @@ def export_tree(request):
 	if request.method != "GET":
 		return JsonResponse({"error": "Method not allowed"}, status=405)
 
-	db_file = _db_path()
 	media_root = Path(settings.MEDIA_ROOT)
-
-	if not db_file.exists():
-		return JsonResponse({"error": "Database file was not found"}, status=500)
-
 	buffer = io.BytesIO()
-	with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
-		archive.write(db_file, arcname="db.sqlite3")
-		if media_root.exists():
+	with tempfile.TemporaryDirectory(prefix="familytree_export_") as temp_dir:
+		# data.json restores on any database (desktop SQLite or hosted Postgres).
+		fixture = Path(temp_dir) / "data.json"
+		call_command("dumpdata", "familyTree", output=str(fixture), verbosity=0)
+
+		with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+			archive.write(fixture, arcname="data.json")
+			if connection.vendor == "sqlite":
+				# Also the raw file, for older desktop versions. The backup API gives a consistent snapshot even while other requests write.
+				snapshot = Path(temp_dir) / "db.sqlite3"
+				connection.ensure_connection()
+				with closing(sqlite3.connect(snapshot)) as target:
+					connection.connection.backup(target)
+				archive.write(snapshot, arcname="db.sqlite3")
 			for root, _, files in os.walk(media_root):
 				for file_name in files:
 					abs_path = Path(root) / file_name
-					rel_path = abs_path.relative_to(media_root)
-					archive.write(abs_path, arcname=str(Path("media") / rel_path))
+					archive.write(abs_path, arcname=str(Path("media") / abs_path.relative_to(media_root)))
 
 	response = HttpResponse(buffer.getvalue(), content_type="application/zip")
 	response["Content-Disposition"] = 'attachment; filename="family_tree_backup.zip"'
@@ -963,36 +847,54 @@ def import_tree(request):
 	if not backup:
 		return JsonResponse({"error": "backup file is required"}, status=400)
 
-	temp_dir = Path(tempfile.mkdtemp(prefix="familytree_import_"))
-	try:
-		with zipfile.ZipFile(backup) as archive:
-			_safe_extract_zip(archive, temp_dir)
+	with tempfile.TemporaryDirectory(prefix="familytree_import_") as temp_dir:
+		temp_dir = Path(temp_dir)
+		try:
+			with zipfile.ZipFile(backup) as archive:
+				_safe_extract_zip(archive, temp_dir)
+		except (zipfile.BadZipFile, ValueError):
+			return JsonResponse({"error": "Invalid zip file"}, status=400)
 
+		fixture = temp_dir / "data.json"
 		imported_db = temp_dir / "db.sqlite3"
-		if not imported_db.exists():
-			return JsonResponse({"error": "Backup does not contain db.sqlite3"}, status=400)
+		if not fixture.exists() and not imported_db.exists():
+			return JsonResponse({"error": "Backup contains neither data.json nor db.sqlite3"}, status=400)
+		if not fixture.exists():
+			try:
+				_validate_family_db(imported_db)
+			except sqlite3.DatabaseError as exc:
+				return JsonResponse({"error": f"Invalid database in backup: {exc}"}, status=400)
 
-		destination_db = _db_path()
-		destination_db.parent.mkdir(parents=True, exist_ok=True)
-
-		connection.close()
-		shutil.copy2(imported_db, destination_db)
+		try:
+			if fixture.exists():
+				_replace_family_data(fixture)
+			elif connection.vendor == "sqlite":
+				# Restore through the live connection: SQLite locks the file, so concurrent requests never see a torn copy.
+				connection.ensure_connection()
+				with closing(sqlite3.connect(imported_db)) as source:
+					source.backup(connection.connection)
+				call_command("migrate", interactive=False, verbosity=0)  # older backups may predate the current schema
+			else:
+				converted = temp_dir / "converted.json"
+				_sqlite_backup_to_fixture(imported_db, converted)
+				_replace_family_data(converted)
+		except (DeserializationError, IntegrityError, ValueError) as exc:
+			return JsonResponse({"error": f"Invalid data in backup: {exc}"}, status=400)
 
 		imported_media = temp_dir / "media"
-		destination_media = Path(settings.MEDIA_ROOT)
-		destination_media.parent.mkdir(parents=True, exist_ok=True)
 		if imported_media.exists():
-			if destination_media.exists():
-				shutil.rmtree(destination_media)
-			shutil.copytree(imported_media, destination_media)
+			# Copy next to the live folder first, then swap, so a failed copy never deletes current photos.
+			media_root = Path(settings.MEDIA_ROOT)
+			staged, previous = media_root.with_name("media.importing"), media_root.with_name("media.previous")
+			shutil.rmtree(staged, ignore_errors=True)
+			shutil.rmtree(previous, ignore_errors=True)
+			shutil.copytree(imported_media, staged)
+			if media_root.exists():
+				media_root.rename(previous)
+			staged.rename(media_root)
+			shutil.rmtree(previous, ignore_errors=True)
 
-		return JsonResponse({"status": "ok", "message": "Tree imported successfully"})
-	except zipfile.BadZipFile:
-		return JsonResponse({"error": "Invalid zip file"}, status=400)
-	except Exception as exc:
-		return JsonResponse({"error": str(exc)}, status=500)
-	finally:
-		shutil.rmtree(temp_dir, ignore_errors=True)
+	return JsonResponse({"status": "ok", "message": "Tree imported successfully"})
 
 
 def dashboard(request):

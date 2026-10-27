@@ -25,3 +25,7 @@ node_modules/
 /familytree_front/dist/
 /familytree_front/build/
 /familytree_front/release/
+
+# Brag video build: duplicate archive, and the licensed music bed (not redistributed)
+/brag-output/familyTree.zip
+/brag-output/composition/assets/music/

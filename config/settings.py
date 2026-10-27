@@ -1,4 +1,6 @@
 from pathlib import Path
+
+from corsheaders.defaults import default_headers
 import os
 import sys
 
@@ -26,10 +28,16 @@ else:
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(DATA_DIR / 'media', exist_ok=True)
 
-# 3. CORE SETTINGS (Hardcoded for local use)
-SECRET_KEY = 'django-insecure-8f*+h2y#v(l_x$9z!c)m^w%q@k&p=t3j7b'
-DEBUG = True  # Keep True if you want to see errors, or False for a cleaner app
-ALLOWED_HOSTS = ['*']
+# 3. CORE SETTINGS
+# Defaults suit the desktop app (local only). The Docker image overrides them through the environment.
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-8f*+h2y#v(l_x$9z!c)m^w%q@k&p=t3j7b')
+DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '1'
+# Refusing other Host headers blocks DNS-rebinding attacks; a hosted install lists its own domain here.
+ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost').split(',')
+# Set by Electron on every launch, or by the Docker host once; see familyTree/middleware.py.
+API_TOKEN = os.environ.get('FAMILYTREE_API_TOKEN')
+# Built React app (familytree_front/dist). When set, Django serves the UI at "/" (Docker image).
+FRONTEND_DIR = Path(os.environ['FAMILYTREE_FRONTEND_DIR']) if os.environ.get('FAMILYTREE_FRONTEND_DIR') else None
 
 # 4. APPS & MIDDLEWARE
 INSTALLED_APPS = [
@@ -46,6 +54,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
+    'familyTree.middleware.ApiTokenMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -76,8 +85,26 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 # 5. DATABASE CONFIGURATION (Points to AppData in Production)
+def _database_from_url(url):
+    """postgres://user:pass@host:port/name?sslmode=require (e.g. Neon) -> a Django DATABASES entry."""
+    from urllib.parse import parse_qsl, unquote, urlsplit
+    parts = urlsplit(url)
+    return {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': unquote(parts.path.lstrip('/')),
+        'USER': unquote(parts.username or ''),
+        'PASSWORD': unquote(parts.password or ''),
+        'HOST': parts.hostname or '',
+        'PORT': str(parts.port or ''),
+        'OPTIONS': dict(parse_qsl(parts.query)),  # sslmode, channel_binding, ...
+        'CONN_MAX_AGE': 60,
+        'CONN_HEALTH_CHECKS': True,
+    }
+
+
+# Hosted (Render + Neon) sets DATABASE_URL; the desktop app and Docker image use SQLite in DATA_DIR.
 DATABASES = {
-    'default': {
+    'default': _database_from_url(os.environ['DATABASE_URL']) if os.environ.get('DATABASE_URL') else {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': DATA_DIR / 'db.sqlite3',
     }
@@ -101,4 +128,8 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = DATA_DIR / 'media'
 
 # 8. CORS CONFIGURATION
-CORS_ALLOW_ALL_ORIGINS = True
+# Desktop/Docker: any origin (the API token authorizes callers). Hosted: list the frontend origin(s), comma-separated.
+CORS_ALLOWED_ORIGINS = [o for o in os.environ.get('FAMILYTREE_CORS_ORIGINS', '').split(',') if o]
+CORS_ALLOW_ALL_ORIGINS = not CORS_ALLOWED_ORIGINS
+CORS_ALLOW_HEADERS = (*default_headers, 'x-familytree-token')
+CORS_EXPOSE_HEADERS = ['X-Total-Count']  # lets the UI say "showing N of M"

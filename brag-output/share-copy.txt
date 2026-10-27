@@ -1,0 +1,1 @@
+Introducing Family Tree (شجرة العائلة): explore family connections, add members, and keep your family history organized. It speaks Arabic, English and French, remembers every birthday, and runs offline on your own computer or self-hosted in Docker.
