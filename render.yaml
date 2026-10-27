@@ -1,0 +1,21 @@
+# Render blueprint: the Django API (Docker) for the hosted demo.
+# Database: Neon Postgres (DATABASE_URL). Frontend: Cloudflare Pages (FAMILYTREE_CORS_ORIGINS).
+services:
+  - type: web
+    name: familytree-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/stats/
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        sync: false # paste the Neon connection string when applying the blueprint
+      - key: FAMILYTREE_CORS_ORIGINS
+        sync: false # the Cloudflare Pages URL, e.g. https://familytree.pages.dev
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DJANGO_ALLOWED_HOSTS
+        value: .onrender.com
+      - key: DJANGO_DEBUG
+        value: "0"
