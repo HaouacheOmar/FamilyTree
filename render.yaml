@@ -13,7 +13,7 @@ services:
       - key: DATABASE_URL
         sync: false # paste the Neon connection string when applying the blueprint
       - key: FAMILYTREE_CORS_ORIGINS
-        sync: false # the Cloudflare Pages URL, e.g. https://familytree.pages.dev
+        value: https://familytree-7d2.pages.dev # the Cloudflare Pages frontend
       - key: DJANGO_SECRET_KEY
         generateValue: true
       - key: DJANGO_ALLOWED_HOSTS
